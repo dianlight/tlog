@@ -607,9 +607,9 @@ func GetTimeFormat() string {
 	return formatterConfig.TimeFormat
 }
 
-// WithLevel creates a logger with a specific minimum level
-// This is useful for creating loggers with different levels without affecting the global logger
-func WithLevel(level slog.Level) *slog.Logger {
+// withLevelLogger creates a slog.Logger with a specific minimum level (unexported helper).
+// This replaces the former exported WithLevel constructor to allow adding a WithLevel LoggerOption.
+func withLevelLogger(level slog.Level) *slog.Logger {
 	handler := createBaseHandler(level)
 	return slog.New(handler)
 }
@@ -634,6 +634,14 @@ func WithAddCommonKeys(keys []string) LoggerOption {
 	}
 }
 
+// WithLevel sets the minimum log level for the logger instance (functional option).
+// This does not affect the global default logger's level unless used during its creation.
+func WithLevel(level slog.Level) LoggerOption {
+	return func(l *Logger) {
+		l.Logger = withLevelLogger(level)
+	}
+}
+
 // NewLogger creates a new Logger instance with the default configuration
 func NewLogger(opts ...LoggerOption) *Logger {
 	logger := &Logger{
@@ -648,14 +656,9 @@ func NewLogger(opts ...LoggerOption) *Logger {
 
 // NewLoggerWithLevel creates a new Logger instance with a specific minimum level
 func NewLoggerWithLevel(level slog.Level, opts ...LoggerOption) *Logger {
-	logger := &Logger{
-		Logger:     WithLevel(level),
-		commonKeys: defaultCommonKeys,
-	}
-	for _, opt := range opts {
-		opt(logger)
-	}
-	return logger
+	// Prepend the level option so explicit opts can override if they also set level later
+	opts = append([]LoggerOption{WithLevel(level)}, opts...)
+	return NewLogger(opts...)
 }
 
 // Logger methods that emit events to callbacks
