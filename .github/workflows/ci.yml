@@ -1,0 +1,51 @@
+name: CI
+
+on:
+    push:
+        branches: [main]
+        tags: ["v*"]
+        paths-ignore:
+            - ".github/**"
+    pull_request:
+        branches: [main]
+    release:
+        types: [published]
+
+jobs:
+    build:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v5
+
+            - name: Set up Go
+              uses: actions/setup-go@v6
+              with:
+                  go-version-file: "go.mod"
+
+            - name: Cache Go modules
+              uses: actions/cache@v4
+              with:
+                  path: |
+                      ~/.cache/go-build
+                      ${{ github.workspace }}/go/pkg/mod
+                  key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+                  restore-keys: |
+                      ${{ runner.os }}-go-
+
+            - name: Install tools
+              run: |
+                  go install honnef.co/go/tools/cmd/staticcheck@latest
+
+            - name: Run CI
+              run: make ci
+
+            - name: Run coverage and save artifact
+              run: make coverage
+              continue-on-error: true
+
+            - name: Upload to Codecov
+              uses: codecov/codecov-action@v5
+              with:
+                  token: ${{ secrets.CODECOV_TOKEN }}
+                  fail_ci_if_error: false

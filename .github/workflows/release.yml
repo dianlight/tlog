@@ -1,0 +1,54 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          PREV_TAG=$(git describe --tags --abbrev=0 ${GITHUB_REF}^ 2>/dev/null || true)
+          echo "TAG: $TAG"
+          echo "PREV_TAG: $PREV_TAG"
+          touch notes.txt
+          if [ -n "$PREV_TAG" ]; then
+            git --no-pager log ${PREV_TAG}..${TAG} --pretty=format:"- %s (%h)" > notes.txt 2>error.log || echo "git log for range failed: $(cat error.log)" >&2
+          else
+            git --no-pager log --pretty=format:"- %s (%h)" > notes.txt 2>error.log || echo "git log for all failed: $(cat error.log)" >&2
+          fi
+          # Fallback if no commits were found (avoid empty body)
+          if [ ! -s notes.txt ]; then
+            echo "No changes since previous tag." > notes.txt
+          fi
+          # Ensure notes.txt ends with a newline
+          echo "" >> notes.txt
+          # Append multi-line output safely to GITHUB_OUTPUT
+          {
+            echo "notes<<EOF_NOTES"
+            cat notes.txt
+            echo "EOF_NOTES"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref, '-') }}
+          draft: false
+          body: ${{ steps.release_notes.outputs.notes }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
