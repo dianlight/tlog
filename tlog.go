@@ -34,6 +34,7 @@ const (
 // Logger wraps slog.Logger with additional tlog functionality
 type Logger struct {
 	*slog.Logger
+	commonKeys []string
 }
 
 // levelNames maps level strings to slog.Level values
@@ -58,6 +59,9 @@ var reverseLevelNames = map[slog.Level]string{
 	LevelError:  "ERROR",
 	LevelFatal:  "FATAL",
 }
+
+// defaultCommonKeys is the default list of context keys to extract
+var defaultCommonKeys = []string{"X-Trace-Id", "X-Span-Id", "request_id", "user_id", "session_id", "trace_id", "span_id", "event_uuid"}
 
 var levelColorNumbers = map[string]uint8{
 	"TRACE":  7,
@@ -114,14 +118,16 @@ func isTerminalSupported() bool {
 }
 
 // extractContextValues extracts key-value pairs from context
-func extractContextValues(ctx context.Context) []slog.Attr {
+func extractContextValues(ctx context.Context, commonKeys []string) []slog.Attr {
 	var attrs []slog.Attr
 
 	// Use reflection to inspect context values
 	// This is a basic implementation - could be extended
 	if ctx != nil {
 		// Try common context keys
-		commonKeys := []string{"X-Trace-Id", "X-Span-Id", "request_id", "user_id", "session_id", "trace_id", "span_id", "event_uuid"}
+		if commonKeys == nil {
+			commonKeys = defaultCommonKeys
+		}
 		for _, key := range commonKeys {
 			if val := ctx.Value(key); val != nil {
 				attrs = append(attrs, slog.Any(key, val))
@@ -133,7 +139,7 @@ func extractContextValues(ctx context.Context) []slog.Attr {
 }
 
 // extractContextToArgs extracts context values and converts them to args format
-func extractContextToArgs(ctx context.Context) []any {
+func extractContextToArgs(ctx context.Context, commonKeys []string) []any {
 	if ctx == nil {
 		return nil
 	}
@@ -141,7 +147,9 @@ func extractContextToArgs(ctx context.Context) []any {
 	var args []any
 
 	// Try common context keys
-	commonKeys := []string{"X-Trace-Id", "X-Span-Id", "request_id", "user_id", "session_id", "trace_id", "span_id", "event_uuid"}
+	if commonKeys == nil {
+		commonKeys = defaultCommonKeys
+	}
 	for _, key := range commonKeys {
 		if val := ctx.Value(key); val != nil {
 			args = append(args, key, val)
@@ -178,7 +186,7 @@ func createBaseHandler(level slog.Level) slog.Handler {
 			// Extract context values and add them as log attributes
 			if a.Key == "context" {
 				if ctx, ok := a.Value.Any().(context.Context); ok {
-					ctxAttrs := extractContextValues(ctx)
+					ctxAttrs := extractContextValues(ctx, defaultCommonKeys)
 					if len(ctxAttrs) > 0 {
 						args := make([]any, len(ctxAttrs))
 						for i, attr := range ctxAttrs {
@@ -265,7 +273,8 @@ var defaultLogger *Logger
 func initializeLogger() {
 	handler := createBaseHandler(programLevel.Level())
 	defaultLogger = &Logger{
-		Logger: slog.New(handler),
+		Logger:     slog.New(handler),
+		commonKeys: defaultCommonKeys,
 	}
 	slog.SetDefault(defaultLogger.Logger)
 }
@@ -332,7 +341,7 @@ func Trace(msg string, args ...any) {
 
 // TraceContext logs a message at trace level with context
 func TraceContext(ctx context.Context, msg string, args ...any) {
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, LevelTrace, msg, allArgs...)
 }
@@ -364,7 +373,7 @@ func (l *Logger) log(ctx context.Context, level slog.Level, msg string, args ...
 
 // DebugContext logs a message at debug level with context
 func DebugContext(ctx context.Context, msg string, args ...any) {
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, slog.LevelDebug, msg, allArgs...)
 }
@@ -378,7 +387,7 @@ func Info(msg string, args ...any) {
 // InfoContext logs a message at info level with context
 func InfoContext(ctx context.Context, msg string, args ...any) {
 	// Extract context values and add them to args
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, slog.LevelInfo, msg, allArgs...)
 }
@@ -391,7 +400,7 @@ func Notice(msg string, args ...any) {
 
 // NoticeContext logs a message at notice level with context
 func NoticeContext(ctx context.Context, msg string, args ...any) {
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, LevelNotice, msg, allArgs...)
 }
@@ -404,7 +413,7 @@ func Warn(msg string, args ...any) {
 
 // WarnContext logs a message at warning level with context
 func WarnContext(ctx context.Context, msg string, args ...any) {
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, slog.LevelWarn, msg, allArgs...)
 }
@@ -417,7 +426,7 @@ func Error(msg string, args ...any) {
 
 // ErrorContext logs a message at error level with context
 func ErrorContext(ctx context.Context, msg string, args ...any) {
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, slog.LevelError, msg, allArgs...)
 }
@@ -431,7 +440,7 @@ func Fatal(msg string, args ...any) {
 
 // FatalContext logs a message at fatal level with context and exits the program
 func FatalContext(ctx context.Context, msg string, args ...any) {
-	contextArgs := extractContextToArgs(ctx)
+	contextArgs := extractContextToArgs(ctx, defaultLogger.commonKeys)
 	allArgs := append(args, contextArgs...)
 	defaultLogger.log(ctx, LevelFatal, msg, allArgs...)
 	panic("Fatal log called, exiting program") // Use panic to ensure all deferred functions run
@@ -605,18 +614,48 @@ func WithLevel(level slog.Level) *slog.Logger {
 	return slog.New(handler)
 }
 
-// NewLogger creates a new Logger instance with the default configuration
-func NewLogger() *Logger {
-	return &Logger{
-		Logger: slog.Default(),
+// LoggerOption is a functional option for configuring a Logger
+type LoggerOption func(*Logger)
+
+// WithCommonKeys sets custom context keys to extract from context.Context
+func WithCommonKeys(keys []string) LoggerOption {
+	return func(l *Logger) {
+		l.commonKeys = keys
 	}
 }
 
-// NewLoggerWithLevel creates a new Logger instance with a specific minimum level
-func NewLoggerWithLevel(level slog.Level) *Logger {
-	return &Logger{
-		Logger: WithLevel(level),
+// WithAddCommonKeys adds custom context keys to the default set of common keys
+func WithAddCommonKeys(keys []string) LoggerOption {
+	return func(l *Logger) {
+		// Create a copy of defaultCommonKeys and append new keys
+		l.commonKeys = make([]string, len(defaultCommonKeys)+len(keys))
+		copy(l.commonKeys, defaultCommonKeys)
+		copy(l.commonKeys[len(defaultCommonKeys):], keys)
 	}
+}
+
+// NewLogger creates a new Logger instance with the default configuration
+func NewLogger(opts ...LoggerOption) *Logger {
+	logger := &Logger{
+		Logger:     slog.Default(),
+		commonKeys: defaultCommonKeys,
+	}
+	for _, opt := range opts {
+		opt(logger)
+	}
+	return logger
+}
+
+// NewLoggerWithLevel creates a new Logger instance with a specific minimum level
+func NewLoggerWithLevel(level slog.Level, opts ...LoggerOption) *Logger {
+	logger := &Logger{
+		Logger:     WithLevel(level),
+		commonKeys: defaultCommonKeys,
+	}
+	for _, opt := range opts {
+		opt(logger)
+	}
+	return logger
 }
 
 // Logger methods that emit events to callbacks
