@@ -327,9 +327,10 @@ func getCallerInfo(skipFrames int) (file string, function string, line int) {
 }
 
 // WithCaller is a helper function that adds caller information to the log args
-// Usage: tlog.Debug("message", tlog.WithCaller()..., "key", "value")
-func WithCaller() []any {
-	file, function, line := getCallerInfo(2)
+// The skipFrames parameter allows skipping additional stack frames beyond the default
+// Usage: tlog.Debug("message", tlog.WithCaller(0)..., "key", "value")
+func WithCaller(skipFrames int) []any {
+	file, function, line := getCallerInfo(2 + skipFrames)
 	return []any{"caller", fmt.Sprintf("%s:%s:%d", file, function, line)}
 }
 
