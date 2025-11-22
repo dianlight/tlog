@@ -177,12 +177,5 @@
     "go.diagnostic.vulncheck": "Imports",
     "go.languageServerFlags": [
         "-mcp.listen=localhost:8092"
-    ],
-    "chat.mcp.serverSampling": {
-        "srat/.vscode/mcp.json: gopls-mcp": {
-            "allowedModels": [
-                "copilot/claude-sonnet-4.5"
-            ]
-        }
-    }
+    ]
 }
