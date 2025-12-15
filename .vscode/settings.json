@@ -176,6 +176,6 @@
     "files.autoSaveWorkspaceFilesOnly": true,
     "go.diagnostic.vulncheck": "Imports",
     "go.languageServerFlags": [
-        "-mcp.listen=localhost:8092"
+        "-mcp.listen=localhost:8093"
     ]
 }

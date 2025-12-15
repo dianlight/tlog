@@ -12,7 +12,7 @@
     },
     "gopls-mcp": {
       "type": "sse",
-      "url": "http://localhost:8092",
+      "url": "http://localhost:8093",
     }
   }
 }

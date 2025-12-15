@@ -19,6 +19,10 @@ type TlogSuite struct {
 	originalLevel slog.Level
 }
 
+type contextKey string
+
+const testContextKey contextKey = "test-key"
+
 func (suite *TlogSuite) SetupTest() {
 	// Store the original level to restore it after each test
 	suite.originalLevel = tlog.GetLevel()
@@ -554,7 +558,7 @@ func (suite *TlogSuite) TestCallbackWithContextMethods() {
 	// Register callback for debug level
 	tlog.RegisterCallback(tlog.LevelDebug, callback)
 
-	ctx := context.WithValue(context.Background(), "test-key", "test-value")
+	ctx := context.WithValue(context.Background(), testContextKey, "test-value")
 
 	// Test context methods
 	tlog.DebugContext(ctx, "debug with context", "debug", true)
@@ -780,6 +784,97 @@ func (suite *TlogSuite) TestCallbackArgsFormatting() {
 		suite.Equal("test error message", errorMap[0].Value.String())
 		suite.Contains(errorMap[1].Value.String(), "errorString") // fmt.Errorf creates *errors.errorString
 		suite.Equal("test", argsMap["context"])
+	})
+
+	// Test 3: Sensitive data hiding in nested structures
+	suite.Run("NestedSensitiveDataHiding", func() {
+		config := tlog.GetFormatterConfig()
+		config.HideSensitiveData = true
+		config.EnableFormatting = true
+		tlog.SetFormatterConfig(config)
+
+		mu.Lock()
+		receivedEvents = nil
+		mu.Unlock()
+
+		nestedPayload := map[string]any{
+			"user": map[string]any{
+				"password": "secret123",
+				"profile": map[string]any{
+					"token": "abc123",
+				},
+			},
+			"sessions": []any{
+				map[string]any{
+					"auth_token": "abc123",
+					"details": []any{
+						map[string]any{"password": "secret123"},
+					},
+				},
+			},
+		}
+
+		tlog.Info("nested sensitive data", "payload", nestedPayload)
+
+		suite.Eventually(func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(receivedEvents) > 0
+		}, time.Second*2, time.Millisecond*50)
+
+		mu.Lock()
+		defer mu.Unlock()
+		suite.Require().Len(receivedEvents, 1)
+
+		event := receivedEvents[0]
+		argsMap := make(map[string]any)
+		event.Record.Attrs(func(attr slog.Attr) bool {
+			argsMap[attr.Key] = attr.Value.Any()
+			return true
+		})
+
+		payload, ok := argsMap["payload"]
+		suite.Require().True(ok)
+
+		collectStrings := func(value any) []string {
+			var out []string
+			var walk func(any)
+			walk = func(v any) {
+				switch val := v.(type) {
+				case string:
+					out = append(out, val)
+				case []slog.Attr:
+					for _, a := range val {
+						walk(a.Value.Any())
+					}
+				case map[string]any:
+					for _, nestedVal := range val {
+						walk(nestedVal)
+					}
+				case map[string]string:
+					for _, nestedVal := range val {
+						walk(nestedVal)
+					}
+				case []any:
+					for _, nestedVal := range val {
+						walk(nestedVal)
+					}
+				case []map[string]any:
+					for _, nestedMap := range val {
+						walk(nestedMap)
+					}
+				}
+			}
+			walk(value)
+			return out
+		}
+
+		collected := collectStrings(payload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
 	})
 
 	// Test 4: No formatting when disabled
