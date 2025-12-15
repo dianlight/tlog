@@ -9,6 +9,11 @@ import (
 	"gitlab.com/tozd/go/errors"
 )
 
+const (
+	requestIDKey contextKey = "request_id"
+	userIDKey    contextKey = "user_id"
+)
+
 // TestTozdErrorFormatter demonstrates the formatted output of tozd errors with stacktraces
 func TestTozdErrorFormatter(t *testing.T) {
 	// Set up tlog with debug level to see all output
@@ -47,8 +52,8 @@ func TestTozdErrorFormatter(t *testing.T) {
 	tlog.Error("Error chain", "error", chainErr)
 
 	// Test with context
-	ctx := context.WithValue(context.Background(), "request_id", "req-12345")
-	ctx = context.WithValue(ctx, "user_id", "user-67890")
+	ctx := context.WithValue(context.Background(), requestIDKey, "req-12345")
+	ctx = context.WithValue(ctx, userIDKey, "user-67890")
 	tlog.ErrorContext(ctx, "Error with context", "error", stackErr)
 
 	// Test Join errors
