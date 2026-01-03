@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -956,6 +957,270 @@ func (suite *TlogSuite) TestCallbackArgsFormatting() {
 		suite.Equal("*******", argsMap["client_ip"])
 		suite.Equal("10.0.0.1", argsMap["server_address"])
 		suite.Equal(int64(8080), argsMap["port"]) // Non-IP field should remain unchanged
+	})
+}
+
+func (suite *TlogSuite) TestSensitiveDataHidingObjects() {
+	originalConfig := tlog.GetFormatterConfig()
+	defer tlog.SetFormatterConfig(originalConfig)
+
+	var mu sync.Mutex
+	var receivedEvents []tlog.LogEvent
+
+	callback := func(event tlog.LogEvent) {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedEvents = append(receivedEvents, event)
+	}
+
+	tlog.RegisterCallback(tlog.LevelInfo, callback)
+
+	applyMasking := func() {
+		config := tlog.GetFormatterConfig()
+		config.HideSensitiveData = true
+		config.EnableFormatting = true
+		tlog.SetFormatterConfig(config)
+	}
+
+	resetEvents := func() {
+		mu.Lock()
+		defer mu.Unlock()
+		receivedEvents = nil
+	}
+
+	collectArgs := func() map[string]any {
+		suite.Eventually(func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return len(receivedEvents) > 0
+		}, time.Second*2, time.Millisecond*50)
+
+		mu.Lock()
+		defer mu.Unlock()
+		suite.Require().NotEmpty(receivedEvents)
+
+		event := receivedEvents[len(receivedEvents)-1]
+		argsMap := make(map[string]any)
+		event.Record.Attrs(func(attr slog.Attr) bool {
+			argsMap[attr.Key] = attr.Value.Any()
+			return true
+		})
+		return argsMap
+	}
+
+	collectStrings := func(value any) []string {
+		var out []string
+
+		var walk func(any)
+		walk = func(v any) {
+			switch val := v.(type) {
+			case string:
+				out = append(out, val)
+			case map[string]any:
+				for _, nested := range val {
+					walk(nested)
+				}
+			case map[string]string:
+				for _, nested := range val {
+					walk(nested)
+				}
+			case []any:
+				for _, nested := range val {
+					walk(nested)
+				}
+			case []map[string]any:
+				for _, nested := range val {
+					walk(nested)
+				}
+			case []slog.Attr:
+				for _, nested := range val {
+					walk(nested.Value.Any())
+				}
+			default:
+				rv := reflect.ValueOf(v)
+				if !rv.IsValid() {
+					return
+				}
+				switch rv.Kind() {
+				case reflect.Pointer:
+					if rv.IsNil() {
+						return
+					}
+					walk(rv.Elem().Interface())
+				case reflect.Slice, reflect.Array:
+					for i := 0; i < rv.Len(); i++ {
+						walk(rv.Index(i).Interface())
+					}
+				case reflect.Struct:
+					typeOf := rv.Type()
+					for i := 0; i < rv.NumField(); i++ {
+						if typeOf.Field(i).PkgPath != "" {
+							continue
+						}
+						walk(rv.Field(i).Interface())
+					}
+				}
+			}
+		}
+
+		walk(value)
+		return out
+	}
+
+	getPayload := func(payload any) any {
+		resetEvents()
+		applyMasking()
+		tlog.Info("sensitive payload", "payload", payload)
+		args := collectArgs()
+		val, ok := args["payload"]
+		suite.Require().True(ok)
+		return val
+	}
+
+	suite.Run("SimpleObjectValue", func() {
+		payload := map[string]any{
+			"password": "secret123",
+			"token":    "abc123",
+			"note":     "visible",
+		}
+
+		maskedPayload := getPayload(payload)
+		collected := collectStrings(maskedPayload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "visible")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
+	})
+
+	suite.Run("SimpleObjectPointer", func() {
+		payload := map[string]any{
+			"password": "secret123",
+			"token":    "abc123",
+			"note":     "visible",
+		}
+
+		maskedPayload := getPayload(&payload)
+		collected := collectStrings(maskedPayload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "visible")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
+	})
+
+	suite.Run("ComplexObjectValue", func() {
+		payload := map[string]any{
+			"user": map[string]any{
+				"password": "secret123",
+				"profile": map[string]any{
+					"token":   "abc123",
+					"api_key": "key98765",
+				},
+			},
+			"sessions": []any{
+				map[string]any{
+					"token": "abc123",
+					"payload": map[string]string{
+						"password": "secret123",
+					},
+				},
+			},
+		}
+
+		maskedPayload := getPayload(payload)
+		collected := collectStrings(maskedPayload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "key9*******")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
+		suite.NotContains(collected, "key98765")
+	})
+
+	suite.Run("ComplexObjectPointer", func() {
+		password := "secret123"
+		token := "abc123"
+		payload := map[string]any{
+			"user": map[string]any{
+				"password": &password,
+				"profile": &map[string]any{
+					"token":   &token,
+					"api_key": "key98765",
+				},
+			},
+			"sessions": &[]any{
+				map[string]any{
+					"token": &token,
+					"payload": &map[string]string{
+						"password": "secret123",
+					},
+				},
+			},
+		}
+
+		maskedPayload := getPayload(&payload)
+		collected := collectStrings(maskedPayload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "key9*******")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
+		suite.NotContains(collected, "key98765")
+	})
+
+	suite.Run("DeepNestedValue", func() {
+		payload := map[string]any{
+			"level1": map[string]any{
+				"level2": map[string]any{
+					"level3": map[string]any{
+						"level4": map[string]any{
+							"level5": map[string]any{
+								"password": "secret123",
+								"token":    "abc123",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		maskedPayload := getPayload(payload)
+		collected := collectStrings(maskedPayload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
+	})
+
+	suite.Run("DeepNestedPointer", func() {
+		payload := map[string]any{
+			"level1": map[string]any{
+				"level2": map[string]any{
+					"level3": map[string]any{
+						"level4": map[string]any{
+							"level5": map[string]any{
+								"password": "secret123",
+								"token":    "abc123",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		maskedPayload := getPayload(&payload)
+		collected := collectStrings(maskedPayload)
+
+		suite.Contains(collected, "secr*******")
+		suite.Contains(collected, "abc1*******")
+		suite.NotContains(collected, "secret123")
+		suite.NotContains(collected, "abc123")
 	})
 }
 
