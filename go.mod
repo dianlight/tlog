@@ -7,7 +7,7 @@ require (
 	github.com/k0kubun/pp/v3 v3.5.0
 	github.com/lmittmann/tint v1.1.2
 	github.com/mattn/go-isatty v0.0.20
-	github.com/samber/slog-formatter v1.2.0
+	github.com/samber/slog-formatter v1.2.2
 	github.com/samber/slog-multi v1.6.0
 	github.com/stretchr/testify v1.11.1
 	gitlab.com/tozd/go/errors v0.10.0
