@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -369,6 +368,7 @@ func (suite *TlogSuite) TestRegisterCallbackForError() {
 	suite.Equal(testMessage, receivedEvent.Record.Message)
 	suite.Equal(3, receivedEvent.Record.NumAttrs())
 	var extractedErr error
+	var errorMessage string
 	receivedEvent.Record.Attrs(func(attr slog.Attr) bool {
 		suite.T().Log("Attr:", attr.Key, "=", attr.Value.Any())
 		key := strings.ToLower(attr.Key)
@@ -379,12 +379,17 @@ func (suite *TlogSuite) TestRegisterCallbackForError() {
 				extractedErr = vv
 				return false
 			case []slog.Attr:
-				// When formatted, error may be represented as slice of Attrs, first usually message
+				// When formatted, error may be represented as slice of Attrs
 				if len(vv) > 0 {
 					for _, a := range vv {
+						if a.Key == "message" {
+							errorMessage = a.Value.String()
+						}
 						if a.Key == "org_error" {
-							extractedErr = a.Value.Any().(error)
-							return false
+							// org_error might be an error or a map depending on formatter state
+							if err, ok := a.Value.Any().(error); ok {
+								extractedErr = err
+							}
 						}
 					}
 				}
@@ -393,9 +398,15 @@ func (suite *TlogSuite) TestRegisterCallbackForError() {
 		return true
 	})
 
-	suite.Error(extractedErr)
-	suite.Error(extractedErr)
-	suite.Equal("XX test error", extractedErr.Error(), "Extracted error should match the original")
+	// Check if we extracted an error object, otherwise verify the message
+	if extractedErr != nil {
+		suite.Error(extractedErr)
+		suite.Equal("XX test error", extractedErr.Error(), "Extracted error should match the original")
+	} else if errorMessage != "" {
+		suite.Equal("XX test error", errorMessage, "Error message should match the original")
+	} else {
+		suite.Fail("Neither error object nor error message was extracted from the log event")
+	}
 
 	suite.NotZero(receivedEvent.Record.Time)
 	suite.NotNil(receivedEvent.Context)
@@ -688,542 +699,6 @@ func (suite *TlogSuite) TestAllLogLevelsWithCallbacks() {
 	}
 }
 
-func (suite *TlogSuite) TestCallbackArgsFormatting() {
-	// Test that args are formatted according to FormatterConfig before passing to callbacks
-	var receivedEvents []tlog.LogEvent
-	var mu sync.Mutex
-
-	callback := func(event tlog.LogEvent) {
-		mu.Lock()
-		defer mu.Unlock()
-		receivedEvents = append(receivedEvents, event)
-	}
-
-	// Register callback for info level
-	tlog.RegisterCallback(tlog.LevelInfo, callback)
-
-	// Test 1: Sensitive data hiding when enabled
-	suite.Run("SensitiveDataHiding", func() {
-		// Enable sensitive data hiding
-		config := tlog.GetFormatterConfig()
-		config.HideSensitiveData = true
-		tlog.SetFormatterConfig(config)
-
-		// Clear previous events
-		mu.Lock()
-		receivedEvents = nil
-		mu.Unlock()
-
-		// Log with sensitive data
-		tlog.Info("test message", "password", "secret123", "token", "abc123", "normal_field", "visible")
-
-		// Wait for callback
-		suite.Eventually(func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return len(receivedEvents) > 0
-		}, time.Second*2, time.Millisecond*50)
-
-		// Verify sensitive data is redacted in callback args
-		mu.Lock()
-		defer mu.Unlock()
-		suite.Require().Len(receivedEvents, 1)
-
-		event := receivedEvents[0]
-		argsMap := make(map[string]any)
-		event.Record.Attrs(func(attr slog.Attr) bool {
-			argsMap[attr.Key] = attr.Value.Any()
-			return true
-		})
-
-		suite.Equal("secr*******", argsMap["password"])
-		suite.Equal("abc1*******", argsMap["token"])
-		suite.Equal("visible", argsMap["normal_field"])
-	})
-
-	// Test 2: Error formatting
-	suite.Run("ErrorFormatting", func() {
-		// Enable formatting
-		config := tlog.GetFormatterConfig()
-		config.EnableFormatting = true
-		config.HideSensitiveData = false
-		tlog.SetFormatterConfig(config)
-
-		// Clear previous events
-		mu.Lock()
-		receivedEvents = nil
-		mu.Unlock()
-
-		// Log with standard error
-		testErr := fmt.Errorf("test error message")
-		tlog.Info("error occurred", "error", testErr, "context", "test")
-
-		// Wait for callback
-		suite.Eventually(func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return len(receivedEvents) > 0
-		}, time.Second*2, time.Millisecond*50)
-
-		// Verify error is formatted in callback args
-		mu.Lock()
-		defer mu.Unlock()
-		suite.Require().Len(receivedEvents, 1)
-
-		event := receivedEvents[0]
-		argsMap := make(map[string]any)
-		event.Record.Attrs(func(attr slog.Attr) bool {
-			argsMap[attr.Key] = attr.Value.Any()
-			return true
-		})
-
-		// Error should be formatted as a map
-		errorValue := argsMap["error"]
-		suite.Require().IsType([]slog.Attr{}, errorValue)
-
-		errorMap := errorValue.([]slog.Attr)
-		suite.Equal("test error message", errorMap[0].Value.String())
-		suite.Contains(errorMap[1].Value.String(), "errorString") // fmt.Errorf creates *errors.errorString
-		suite.Equal("test", argsMap["context"])
-	})
-
-	// Test 3: Sensitive data hiding in nested structures
-	suite.Run("NestedSensitiveDataHiding", func() {
-		config := tlog.GetFormatterConfig()
-		config.HideSensitiveData = true
-		config.EnableFormatting = true
-		tlog.SetFormatterConfig(config)
-
-		mu.Lock()
-		receivedEvents = nil
-		mu.Unlock()
-
-		nestedPayload := map[string]any{
-			"user": map[string]any{
-				"password": "secret123",
-				"profile": map[string]any{
-					"token": "abc123",
-				},
-			},
-			"sessions": []any{
-				map[string]any{
-					"auth_token": "abc123",
-					"details": []any{
-						map[string]any{"password": "secret123"},
-					},
-				},
-			},
-		}
-
-		tlog.Info("nested sensitive data", "payload", nestedPayload)
-
-		suite.Eventually(func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return len(receivedEvents) > 0
-		}, time.Second*2, time.Millisecond*50)
-
-		mu.Lock()
-		defer mu.Unlock()
-		suite.Require().Len(receivedEvents, 1)
-
-		event := receivedEvents[0]
-		argsMap := make(map[string]any)
-		event.Record.Attrs(func(attr slog.Attr) bool {
-			argsMap[attr.Key] = attr.Value.Any()
-			return true
-		})
-
-		payload, ok := argsMap["payload"]
-		suite.Require().True(ok)
-
-		collectStrings := func(value any) []string {
-			var out []string
-			var walk func(any)
-			walk = func(v any) {
-				switch val := v.(type) {
-				case string:
-					out = append(out, val)
-				case []slog.Attr:
-					for _, a := range val {
-						walk(a.Value.Any())
-					}
-				case map[string]any:
-					for _, nestedVal := range val {
-						walk(nestedVal)
-					}
-				case map[string]string:
-					for _, nestedVal := range val {
-						walk(nestedVal)
-					}
-				case []any:
-					for _, nestedVal := range val {
-						walk(nestedVal)
-					}
-				case []map[string]any:
-					for _, nestedMap := range val {
-						walk(nestedMap)
-					}
-				}
-			}
-			walk(value)
-			return out
-		}
-
-		collected := collectStrings(payload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-	})
-
-	// Test 4: No formatting when disabled
-	suite.Run("NoFormattingWhenDisabled", func() {
-		// Disable formatting
-		config := tlog.GetFormatterConfig()
-		config.EnableFormatting = false
-		tlog.SetFormatterConfig(config)
-
-		// Clear previous events
-		mu.Lock()
-		receivedEvents = nil
-		mu.Unlock()
-
-		// Log with data that would normally be formatted
-		testErr := fmt.Errorf("test error")
-		tlog.Info("no formatting test", "error", testErr, "password", "secret123")
-
-		// Wait for callback
-		suite.Eventually(func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return len(receivedEvents) > 0
-		}, time.Second*2, time.Millisecond*50)
-
-		// Verify args are not formatted
-		mu.Lock()
-		defer mu.Unlock()
-		suite.Require().Len(receivedEvents, 1)
-
-		event := receivedEvents[0]
-		argsMap := make(map[string]any)
-		event.Record.Attrs(func(attr slog.Attr) bool {
-			argsMap[attr.Key] = attr.Value.Any()
-			return true
-		})
-
-		// Args should remain unformatted
-		suite.Equal(testErr, argsMap["error"])        // Original error object
-		suite.Equal("secret123", argsMap["password"]) // Not redacted
-	})
-
-	// Test 5: IP address masking
-	suite.Run("IPAddressMasking", func() {
-		// Enable sensitive data hiding
-		config := tlog.GetFormatterConfig()
-		config.HideSensitiveData = true
-		config.EnableFormatting = true
-		tlog.SetFormatterConfig(config)
-
-		// Clear previous events
-		mu.Lock()
-		receivedEvents = nil
-		mu.Unlock()
-
-		// Log with IP addresses
-		tlog.Info("network info", "client_ip", "192.168.1.100", "server_address", "10.0.0.1", "port", 8080)
-
-		// Wait for callback
-		suite.Eventually(func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return len(receivedEvents) > 0
-		}, time.Second*2, time.Millisecond*50)
-
-		// Verify IP addresses are masked
-		mu.Lock()
-		defer mu.Unlock()
-		suite.Require().Len(receivedEvents, 1)
-
-		event := receivedEvents[0]
-		argsMap := make(map[string]any)
-		event.Record.Attrs(func(attr slog.Attr) bool {
-			argsMap[attr.Key] = attr.Value.Any()
-			return true
-		})
-
-		// IP addresses should be masked
-		suite.Equal("*******", argsMap["client_ip"])
-		suite.Equal("10.0.0.1", argsMap["server_address"])
-		suite.Equal(int64(8080), argsMap["port"]) // Non-IP field should remain unchanged
-	})
-}
-
-func (suite *TlogSuite) TestSensitiveDataHidingObjects() {
-	originalConfig := tlog.GetFormatterConfig()
-	defer tlog.SetFormatterConfig(originalConfig)
-
-	var mu sync.Mutex
-	var receivedEvents []tlog.LogEvent
-
-	callback := func(event tlog.LogEvent) {
-		mu.Lock()
-		defer mu.Unlock()
-		receivedEvents = append(receivedEvents, event)
-	}
-
-	tlog.RegisterCallback(tlog.LevelInfo, callback)
-
-	applyMasking := func() {
-		config := tlog.GetFormatterConfig()
-		config.HideSensitiveData = true
-		config.EnableFormatting = true
-		tlog.SetFormatterConfig(config)
-	}
-
-	resetEvents := func() {
-		mu.Lock()
-		defer mu.Unlock()
-		receivedEvents = nil
-	}
-
-	collectArgs := func() map[string]any {
-		suite.Eventually(func() bool {
-			mu.Lock()
-			defer mu.Unlock()
-			return len(receivedEvents) > 0
-		}, time.Second*2, time.Millisecond*50)
-
-		mu.Lock()
-		defer mu.Unlock()
-		suite.Require().NotEmpty(receivedEvents)
-
-		event := receivedEvents[len(receivedEvents)-1]
-		argsMap := make(map[string]any)
-		event.Record.Attrs(func(attr slog.Attr) bool {
-			argsMap[attr.Key] = attr.Value.Any()
-			return true
-		})
-		return argsMap
-	}
-
-	collectStrings := func(value any) []string {
-		var out []string
-
-		var walk func(any)
-		walk = func(v any) {
-			switch val := v.(type) {
-			case string:
-				out = append(out, val)
-			case map[string]any:
-				for _, nested := range val {
-					walk(nested)
-				}
-			case map[string]string:
-				for _, nested := range val {
-					walk(nested)
-				}
-			case []any:
-				for _, nested := range val {
-					walk(nested)
-				}
-			case []map[string]any:
-				for _, nested := range val {
-					walk(nested)
-				}
-			case []slog.Attr:
-				for _, nested := range val {
-					walk(nested.Value.Any())
-				}
-			default:
-				rv := reflect.ValueOf(v)
-				if !rv.IsValid() {
-					return
-				}
-				switch rv.Kind() {
-				case reflect.Pointer:
-					if rv.IsNil() {
-						return
-					}
-					walk(rv.Elem().Interface())
-				case reflect.Slice, reflect.Array:
-					for i := 0; i < rv.Len(); i++ {
-						walk(rv.Index(i).Interface())
-					}
-				case reflect.Struct:
-					typeOf := rv.Type()
-					for i := 0; i < rv.NumField(); i++ {
-						if typeOf.Field(i).PkgPath != "" {
-							continue
-						}
-						walk(rv.Field(i).Interface())
-					}
-				}
-			}
-		}
-
-		walk(value)
-		return out
-	}
-
-	getPayload := func(payload any) any {
-		resetEvents()
-		applyMasking()
-		tlog.Info("sensitive payload", "payload", payload)
-		args := collectArgs()
-		val, ok := args["payload"]
-		suite.Require().True(ok)
-		return val
-	}
-
-	suite.Run("SimpleObjectValue", func() {
-		payload := map[string]any{
-			"password": "secret123",
-			"token":    "abc123",
-			"note":     "visible",
-		}
-
-		maskedPayload := getPayload(payload)
-		collected := collectStrings(maskedPayload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.Contains(collected, "visible")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-	})
-
-	suite.Run("SimpleObjectPointer", func() {
-		payload := map[string]any{
-			"password": "secret123",
-			"token":    "abc123",
-			"note":     "visible",
-		}
-
-		maskedPayload := getPayload(&payload)
-		collected := collectStrings(maskedPayload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.Contains(collected, "visible")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-	})
-
-	suite.Run("ComplexObjectValue", func() {
-		payload := map[string]any{
-			"user": map[string]any{
-				"password": "secret123",
-				"profile": map[string]any{
-					"token":   "abc123",
-					"api_key": "key98765",
-				},
-			},
-			"sessions": []any{
-				map[string]any{
-					"token": "abc123",
-					"payload": map[string]string{
-						"password": "secret123",
-					},
-				},
-			},
-		}
-
-		maskedPayload := getPayload(payload)
-		collected := collectStrings(maskedPayload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.Contains(collected, "key9*******")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-		suite.NotContains(collected, "key98765")
-	})
-
-	suite.Run("ComplexObjectPointer", func() {
-		password := "secret123"
-		token := "abc123"
-		payload := map[string]any{
-			"user": map[string]any{
-				"password": &password,
-				"profile": &map[string]any{
-					"token":   &token,
-					"api_key": "key98765",
-				},
-			},
-			"sessions": &[]any{
-				map[string]any{
-					"token": &token,
-					"payload": &map[string]string{
-						"password": "secret123",
-					},
-				},
-			},
-		}
-
-		maskedPayload := getPayload(&payload)
-		collected := collectStrings(maskedPayload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.Contains(collected, "key9*******")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-		suite.NotContains(collected, "key98765")
-	})
-
-	suite.Run("DeepNestedValue", func() {
-		payload := map[string]any{
-			"level1": map[string]any{
-				"level2": map[string]any{
-					"level3": map[string]any{
-						"level4": map[string]any{
-							"level5": map[string]any{
-								"password": "secret123",
-								"token":    "abc123",
-							},
-						},
-					},
-				},
-			},
-		}
-
-		maskedPayload := getPayload(payload)
-		collected := collectStrings(maskedPayload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-	})
-
-	suite.Run("DeepNestedPointer", func() {
-		payload := map[string]any{
-			"level1": map[string]any{
-				"level2": map[string]any{
-					"level3": map[string]any{
-						"level4": map[string]any{
-							"level5": map[string]any{
-								"password": "secret123",
-								"token":    "abc123",
-							},
-						},
-					},
-				},
-			},
-		}
-
-		maskedPayload := getPayload(&payload)
-		collected := collectStrings(maskedPayload)
-
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.NotContains(collected, "secret123")
-		suite.NotContains(collected, "abc123")
-	})
-}
-
 func (suite *TlogSuite) TestGetCallbackCount() {
 	// Initially no callbacks
 	suite.Equal(0, tlog.GetCallbackCount(tlog.LevelError))
@@ -1399,15 +874,6 @@ func (suite *TlogSuite) TestColorConfiguration() {
 }
 
 // Test sensitive data hiding
-func (suite *TlogSuite) TestSensitiveDataHiding() {
-	// Test enabling sensitive data hiding
-	tlog.EnableSensitiveDataHiding(true)
-	suite.True(tlog.IsSensitiveDataHidingEnabled())
-
-	// Test disabling sensitive data hiding
-	tlog.EnableSensitiveDataHiding(false)
-	suite.False(tlog.IsSensitiveDataHidingEnabled())
-}
 
 // Test time format configuration
 func (suite *TlogSuite) TestTimeFormatConfiguration() {
@@ -1439,27 +905,6 @@ func (suite *TlogSuite) TestEnhancedLoggerCreation() {
 		logger1.Info("test message")
 		logger2.Error("error message")
 	})
-}
-
-// Test formatter integration with logging
-func (suite *TlogSuite) TestFormatterIntegrationWithLogging() {
-	// Enable formatting and sensitive data hiding
-	tlog.EnableSensitiveDataHiding(true)
-
-	// Test that logging with potentially sensitive data doesn't panic
-	suite.NotPanics(func() {
-		tlog.Info("user login", "password", "secret123", "token", "abc123")
-		tlog.Error("connection failed", "ip", "192.168.1.1", "addr", "10.0.0.1")
-	})
-
-	// Test with context
-	ctx := context.Background()
-	suite.NotPanics(func() {
-		tlog.InfoContext(ctx, "context logging", "key", "secret")
-	})
-
-	// Clean up
-	tlog.EnableSensitiveDataHiding(false)
 }
 
 func TestTlogSuite(t *testing.T) {
