@@ -7,6 +7,8 @@ JSON password field|{"user":"john","password":"mySecret123","email":"test@exampl
 JSON token field|{"session":{"token":"abc123xyz","userId":42}}|abc123xyz
 JSON nested password|{"auth":{"credentials":{"password":"SuperSecret!"}}}|SuperSecret!
 JSON api_key field|{"config":{"api_key":"sk-1234567890abcdef"}}|sk-1234567890abcdef
+JSON encoded|{\"config\":{\"api_key\":\"sk-1234567890abcdef\"}}|sk-1234567890abcdef
+Query string with encoded api_key|/search?params=q%3Dtest&api_key%3Dkey_12345|key_12345
 
 # URL-like patterns
 URL with password|https://user:myPassword@example.com/api|myPassword
