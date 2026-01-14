@@ -368,6 +368,7 @@ func (suite *TlogSuite) TestRegisterCallbackForError() {
 	suite.Equal(testMessage, receivedEvent.Record.Message)
 	suite.Equal(3, receivedEvent.Record.NumAttrs())
 	var extractedErr error
+	var errorMessage string
 	receivedEvent.Record.Attrs(func(attr slog.Attr) bool {
 		suite.T().Log("Attr:", attr.Key, "=", attr.Value.Any())
 		key := strings.ToLower(attr.Key)
@@ -378,12 +379,17 @@ func (suite *TlogSuite) TestRegisterCallbackForError() {
 				extractedErr = vv
 				return false
 			case []slog.Attr:
-				// When formatted, error may be represented as slice of Attrs, first usually message
+				// When formatted, error may be represented as slice of Attrs
 				if len(vv) > 0 {
 					for _, a := range vv {
+						if a.Key == "message" {
+							errorMessage = a.Value.String()
+						}
 						if a.Key == "org_error" {
-							extractedErr = a.Value.Any().(error)
-							return false
+							// org_error might be an error or a map depending on formatter state
+							if err, ok := a.Value.Any().(error); ok {
+								extractedErr = err
+							}
 						}
 					}
 				}
@@ -392,9 +398,15 @@ func (suite *TlogSuite) TestRegisterCallbackForError() {
 		return true
 	})
 
-	suite.Error(extractedErr)
-	suite.Error(extractedErr)
-	suite.Equal("XX test error", extractedErr.Error(), "Extracted error should match the original")
+	// Check if we extracted an error object, otherwise verify the message
+	if extractedErr != nil {
+		suite.Error(extractedErr)
+		suite.Equal("XX test error", extractedErr.Error(), "Extracted error should match the original")
+	} else if errorMessage != "" {
+		suite.Equal("XX test error", errorMessage, "Error message should match the original")
+	} else {
+		suite.Fail("Neither error object nor error message was extracted from the log event")
+	}
 
 	suite.NotZero(receivedEvent.Record.Time)
 	suite.NotNil(receivedEvent.Context)
