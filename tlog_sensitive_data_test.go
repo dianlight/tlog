@@ -1348,15 +1348,6 @@ func loadTestPatterns(filename string) ([]TestPattern, error) {
 	return patterns, nil
 }
 
-// sensitiveKeys returns a copy of the sensitive keys map for testing
-func sensitiveKeys() map[string]struct{} {
-	return map[string]struct{}{
-		"password": {}, "pwd": {}, "pass": {}, "passwd": {},
-		"token": {}, "jwt": {}, "auth_token": {}, "access_token": {}, "refresh_token": {},
-		"key": {}, "api_key": {}, "secret": {}, "client_secret": {}, "private_key": {},
-	}
-}
-
 func TestSensitiveDataSuite(t *testing.T) {
 	// Ensure cleanup after all tests
 	defer func() {
