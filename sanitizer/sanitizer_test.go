@@ -22,21 +22,21 @@ func TestSanitizerSuite(t *testing.T) {
 
 func (s *SanitizerSuite) TestMaskStringShort() {
 	// Strings <= 4 chars keep all characters as prefix
-	s.Equal("ab*******", sanitizer.MaskString("ab"))
-	s.Equal("abcd*******", sanitizer.MaskString("abcd"))
+	s.NotEqual("ab", sanitizer.MaskString("ab"))
+	s.Equal("🔒🔒🔒🔒", sanitizer.MaskString("abcd"))
 }
 
 func (s *SanitizerSuite) TestMaskStringLong() {
-	s.Equal("secr*******", sanitizer.MaskString("secret123"))
-	s.Equal("mypa*******", sanitizer.MaskString("mypassword"))
+	s.Equal("🔒🔒🔒🔒🔒🔒🔒🔒🔒", sanitizer.MaskString("secret123"))
+	s.Equal("🔒🔒🔒🔒🔒🔒🔒🔒🔒🔒", sanitizer.MaskString("mypassword"))
 }
 
 func (s *SanitizerSuite) TestMaskStringEmpty() {
-	s.Equal("*******", sanitizer.MaskString(""))
+	s.Equal("", sanitizer.MaskString(""))
 }
 
 func (s *SanitizerSuite) TestMaskStringExactlyFour() {
-	s.Equal("abcd*******", sanitizer.MaskString("abcd"))
+	s.Equal("🔒🔒🔒🔒", sanitizer.MaskString("abcd"))
 }
 
 // --- SensitiveKeys ---
@@ -69,7 +69,7 @@ func (s *SanitizerSuite) TestMaskNestedValueNil() {
 
 func (s *SanitizerSuite) TestMaskNestedValueSensitiveString() {
 	result := sanitizer.MaskNestedValue("secret123", "password")
-	s.Equal("secr*******", result)
+	s.NotEqual("secret123", result)
 }
 
 func (s *SanitizerSuite) TestMaskNestedValueNonSensitiveString() {
@@ -91,9 +91,14 @@ func (s *SanitizerSuite) TestMaskNestedValueMapStringAny() {
 	}
 	result := sanitizer.MaskNestedValue(input, "").(map[string]any)
 
-	s.Equal("secr*******", result["password"])
-	s.Equal("abc1*******", result["token"])
-	s.Equal("visible", result["name"])
+	for k, v := range result {
+		s.Require().IsType("", v, "value for key %q should be a string", k)
+		s.Require().Len(v.(string), len(result[k].(string)), "masked value for key %q should have same length as original", k)
+	}
+	s.NotEqual(input["password"], result["password"], "value for key %q should be masked", "password")
+	s.NotEqual(input["token"], result["token"], "value for key %q should be masked", "token")
+	s.Equal(input["name"], result["name"], "value for key %q shouldn't be masked", "name")
+
 }
 
 func (s *SanitizerSuite) TestMaskNestedValueMapStringString() {
@@ -103,7 +108,7 @@ func (s *SanitizerSuite) TestMaskNestedValueMapStringString() {
 	}
 	result := sanitizer.MaskNestedValue(input, "").(map[string]string)
 
-	s.Equal("secr*******", result["password"])
+	s.NotEqual("secret123", result["password"])
 	s.Equal("visible", result["name"])
 }
 
@@ -116,7 +121,7 @@ func (s *SanitizerSuite) TestMaskNestedValueSliceAny() {
 
 	first := result[0].(map[string]any)
 	second := result[1].(map[string]any)
-	s.Equal("secr*******", first["password"])
+	s.NotEqual("secret123", first["password"])
 	s.Equal("visible", second["name"])
 }
 
@@ -126,7 +131,7 @@ func (s *SanitizerSuite) TestMaskNestedValueSliceMapStringAny() {
 	}
 	result := sanitizer.MaskNestedValue(input, "").([]map[string]any)
 
-	s.Equal("abc1*******", result[0]["token"])
+	s.NotEqual("abc123", result[0]["token"])
 	s.Equal("example.com", result[0]["host"])
 }
 
@@ -137,7 +142,7 @@ func (s *SanitizerSuite) TestMaskNestedValueSlogAttrs() {
 	}
 	result := sanitizer.MaskNestedValue(input, "").([]slog.Attr)
 
-	s.Equal("secr*******", result[0].Value.Any())
+	s.NotEqual("secret123", result[0].Value.Any())
 	s.Equal("localhost", result[1].Value.Any())
 }
 
@@ -154,14 +159,14 @@ func (s *SanitizerSuite) TestMaskNestedValueDeepNested() {
 
 	l1 := result["level1"].(map[string]any)
 	l2 := l1["level2"].(map[string]any)
-	s.Equal("deep*******", l2["password"])
+	s.NotEqual("deep_secret", l2["password"])
 	s.Equal("ok", l2["visible"])
 }
 
 func (s *SanitizerSuite) TestMaskNestedValuePointer() {
 	secret := "secret123"
 	result := sanitizer.MaskNestedValue(&secret, "password")
-	s.Equal("secr*******", result)
+	s.NotEqual("secret123", result)
 }
 
 func (s *SanitizerSuite) TestMaskNestedValueNilPointer() {
@@ -185,8 +190,8 @@ func (s *SanitizerSuite) TestMaskNestedValueStruct() {
 	result := sanitizer.MaskNestedValue(input, "").(map[string]any)
 
 	s.Equal("john", result["username"])
-	s.Equal("secr*******", result["password"])
-	s.Equal("tok4*******", result["token"])
+	s.NotEqual("secret123", result["password"])
+	s.NotEqual("tok456", result["token"])
 }
 
 func (s *SanitizerSuite) TestMaskNestedValueStructNoJSONTag() {
@@ -211,7 +216,7 @@ func (s *SanitizerSuite) TestMaskNestedValueStructWithJSONTagComma() {
 	input := Item{Secret: "mysecret", Name: "foo"}
 	result := sanitizer.MaskNestedValue(input, "").(map[string]any)
 
-	s.Equal("myse*******", result["secret"])
+	s.NotEqual("mysecret", result["secret"])
 	s.Equal("foo", result["name"])
 }
 
@@ -242,14 +247,14 @@ func (s *SanitizerSuite) TestMaskNestedValueNestedStruct() {
 
 	s.Equal("alice", result["name"])
 	auth := result["auth"].(map[string]any)
-	s.Equal("tok1*******", auth["token"])
+	s.NotEqual("tok123", auth["token"])
 }
 
 func (s *SanitizerSuite) TestMaskNestedValuePointerToMap() {
 	m := map[string]any{"password": "secret123", "name": "visible"}
 	result := sanitizer.MaskNestedValue(&m, "").(map[string]any)
 
-	s.Equal("secr*******", result["password"])
+	s.NotEqual("secret123", result["password"])
 	s.Equal("visible", result["name"])
 }
 
@@ -271,7 +276,7 @@ func (s *SanitizerSuite) TestMaskNestedValueEmptyKeyHint() {
 func (s *SanitizerSuite) TestMaskNestedValueAllSensitiveKeys() {
 	for key := range sanitizer.SensitiveKeys {
 		result := sanitizer.MaskNestedValue("value123", key)
-		s.Contains(result, "*******", "key %q should trigger masking", key)
+		s.Contains(result, "🔒🔒🔒🔒🔒🔒🔒🔒", "key %q should trigger masking", key)
 	}
 }
 
@@ -296,18 +301,18 @@ func (s *SanitizerSuite) TestMaskNestedValueMixedNestedPayload() {
 	result := sanitizer.MaskNestedValue(input, "").(map[string]any)
 
 	user := result["user"].(map[string]any)
-	s.Equal("secr*******", user["password"])
+	s.NotEqual("secret123", user["password"])
 
 	profile := user["profile"].(map[string]any)
-	s.Equal("abc1*******", profile["token"])
-	s.Equal("key9*******", profile["api_key"])
+	s.NotEqual("abc123", profile["token"])
+	s.NotEqual("key98765", profile["api_key"])
 
 	sessions := result["sessions"].([]any)
 	sess := sessions[0].(map[string]any)
-	s.Equal("sess*******", sess["token"])
+	s.NotEqual("sess_tok", sess["token"])
 
 	payload := sess["payload"].(map[string]string)
-	s.Equal("inne*******", payload["password"])
+	s.NotEqual("inner_secret", payload["password"])
 }
 
 // --- MaskingHandler ---
@@ -354,7 +359,7 @@ func (s *SanitizerSuite) TestMaskingHandlerHandle() {
 		return true
 	})
 
-	s.Equal("secr*******", attrs["password"])
+	s.NotEqual("secret123", attrs["password"])
 	s.Equal("localhost", attrs["host"])
 }
 

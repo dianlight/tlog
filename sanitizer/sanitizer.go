@@ -9,20 +9,20 @@ import (
 	"strings"
 )
 
+const maskChar = "🔒"
+
 // SensitiveKeys holds keys considered sensitive for masking.
 var SensitiveKeys = map[string]struct{}{
 	"password": {}, "pwd": {}, "pass": {}, "passwd": {},
 	"token": {}, "jwt": {}, "auth_token": {}, "access_token": {}, "refresh_token": {},
 	"key": {}, "api_key": {}, "secret": {}, "client_secret": {}, "private_key": {},
+	"auth": {}, "credential": {},
+	"private": {}, "confidential": {}, "secure": {}, "apikey": {},
+	"bearer": {}, "authorization": {}, "salt": {}, "hash": {},
 }
 
-// MaskString shows the first 4 characters then 7 asterisks.
 func MaskString(s string) string {
-	prefix := s
-	if len(prefix) > 4 {
-		prefix = prefix[:4]
-	}
-	return prefix + strings.Repeat("*", 7)
+	return strings.Repeat(maskChar, len(s))
 }
 
 // MaskNestedValue walks nested structures and masks values whose

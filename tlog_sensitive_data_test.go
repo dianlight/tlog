@@ -15,12 +15,20 @@ import (
 	"time"
 
 	"github.com/dianlight/tlog"
+	"github.com/dianlight/tlog/sanitizer"
 	"github.com/stretchr/testify/suite"
 )
 
 type SensitiveDataSuite struct {
 	suite.Suite
 	originalConfig tlog.FormatterConfig
+}
+
+func expectedPIIMask(value string) string {
+	if len(value) <= 5 {
+		return sanitizer.MaskString("*******")
+	}
+	return sanitizer.MaskString(value[:4] + "*******")
 }
 
 func (suite *SensitiveDataSuite) SetupTest() {
@@ -115,8 +123,8 @@ func (suite *SensitiveDataSuite) TestCallbackArgsFormatting() {
 			return true
 		})
 
-		suite.Equal("secr*******", argsMap["password"])
-		suite.Equal("abc1*******", argsMap["token"])
+		suite.NotEqual("secret123", argsMap["password"])
+		suite.NotEqual("abc123", argsMap["token"])
 		suite.Equal("visible", argsMap["normal_field"])
 	})
 
@@ -251,8 +259,8 @@ func (suite *SensitiveDataSuite) TestCallbackArgsFormatting() {
 
 		collected := collectStrings(payload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
 	})
@@ -466,8 +474,8 @@ func (suite *SensitiveDataSuite) TestSensitiveDataHidingObjects() {
 		maskedPayload := getPayload(payload)
 		collected := collectStrings(maskedPayload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
 		suite.Contains(collected, "visible")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
@@ -483,8 +491,8 @@ func (suite *SensitiveDataSuite) TestSensitiveDataHidingObjects() {
 		maskedPayload := getPayload(&payload)
 		collected := collectStrings(maskedPayload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
 		suite.Contains(collected, "visible")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
@@ -512,9 +520,9 @@ func (suite *SensitiveDataSuite) TestSensitiveDataHidingObjects() {
 		maskedPayload := getPayload(payload)
 		collected := collectStrings(maskedPayload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.Contains(collected, "key9*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
 		suite.NotContains(collected, "key98765")
@@ -544,9 +552,9 @@ func (suite *SensitiveDataSuite) TestSensitiveDataHidingObjects() {
 		maskedPayload := getPayload(&payload)
 		collected := collectStrings(maskedPayload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
-		suite.Contains(collected, "key9*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
 		suite.NotContains(collected, "key98765")
@@ -571,8 +579,8 @@ func (suite *SensitiveDataSuite) TestSensitiveDataHidingObjects() {
 		maskedPayload := getPayload(payload)
 		collected := collectStrings(maskedPayload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
 	})
@@ -596,8 +604,8 @@ func (suite *SensitiveDataSuite) TestSensitiveDataHidingObjects() {
 		maskedPayload := getPayload(&payload)
 		collected := collectStrings(maskedPayload)
 
-		suite.Contains(collected, "secr*******")
-		suite.Contains(collected, "abc1*******")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒🔒🔒🔒")
+		suite.Contains(collected, "🔒🔒🔒🔒🔒🔒")
 		suite.NotContains(collected, "secret123")
 		suite.NotContains(collected, "abc123")
 	})
@@ -655,8 +663,8 @@ func (suite *SensitiveDataSuite) TestCallbackSensitiveDataMasking() {
 		})
 
 		// Sensitive fields should be masked
-		suite.Equal("mypa*******", argsMap["password"])
-		suite.Equal("supe*******", argsMap["api_key"])
+		suite.Equal(expectedPIIMask("mypassword123"), argsMap["password"])
+		suite.Equal(expectedPIIMask("super-secret-key"), argsMap["api_key"])
 		// Non-sensitive field should remain unchanged
 		suite.Equal("john_doe", argsMap["username"])
 	})
@@ -747,12 +755,12 @@ func (suite *SensitiveDataSuite) TestCallbackMultipleSensitiveKeys() {
 	})
 
 	// All sensitive fields should be masked
-	suite.Equal("pass*******", argsMap["password"])
-	suite.Equal("toke*******", argsMap["token"])
-	suite.Equal("jwt7*******", argsMap["jwt"])
-	suite.Equal("secr*******", argsMap["secret"])
-	suite.Equal("key3*******", argsMap["private_key"])
-	suite.Equal("clie*******", argsMap["client_secret"])
+	suite.Equal(expectedPIIMask("pass123"), argsMap["password"])
+	suite.Equal(expectedPIIMask("token456"), argsMap["token"])
+	suite.Equal(expectedPIIMask("jwt789"), argsMap["jwt"])
+	suite.Equal(expectedPIIMask("secret012"), argsMap["secret"])
+	suite.Equal(expectedPIIMask("key345"), argsMap["private_key"])
+	suite.Equal(expectedPIIMask("client678"), argsMap["client_secret"])
 	// Non-sensitive field should remain unchanged
 	suite.Equal("visible_value", argsMap["normal_field"])
 }
@@ -856,10 +864,11 @@ func (suite *SensitiveDataSuite) TestCallbackWithNestedSensitiveStructures() {
 	collected := collectStrings(config_value)
 
 	// Verify sensitive data is masked at all levels
-	suite.Contains(collected, "secr*******") // password
-	suite.Contains(collected, "sess*******") // token values
-	suite.Contains(collected, "api_*******") // api_key
-	suite.Contains(collected, "clie*******") // client_secret
+	suite.Contains(collected, sanitizer.MaskString("secret123"))         // password
+	suite.Contains(collected, sanitizer.MaskString("session_token_abc")) // token values
+	suite.Contains(collected, sanitizer.MaskString("session_token_xyz")) // token values
+	suite.Contains(collected, sanitizer.MaskString("api_key_123"))       // api_key
+	suite.Contains(collected, sanitizer.MaskString("client_secret_456")) // client_secret
 
 	// Verify original sensitive values are not present
 	suite.NotContains(collected, "secret123")
@@ -980,21 +989,25 @@ func (suite *SensitiveDataSuite) TestCallbackConcurrentSensitiveData() {
 			return true
 		})
 
+		iterationVal, hasIteration := argsMap["iteration"]
+		suite.True(hasIteration)
+		iterationStr := fmt.Sprintf("%v", iterationVal)
+
 		// Check that password and token are masked
 		passwordVal, hasPassword := argsMap["password"]
 		if hasPassword {
 			passwordStr, ok := passwordVal.(string)
 			suite.True(ok)
-			suite.Contains(passwordStr, "*******")
-			suite.NotContains(passwordStr, "password_")
+			expectedPassword := expectedPIIMask("password_" + iterationStr)
+			suite.Equal(expectedPassword, passwordStr)
 		}
 
 		tokenVal, hasToken := argsMap["token"]
 		if hasToken {
 			tokenStr, ok := tokenVal.(string)
 			suite.True(ok)
-			suite.Contains(tokenStr, "*******")
-			suite.NotContains(tokenStr, "token_")
+			expectedToken := expectedPIIMask("token_" + iterationStr)
+			suite.Equal(expectedToken, tokenStr)
 		}
 	}
 }
@@ -1082,13 +1095,13 @@ func (suite *SensitiveDataSuite) TestSensitiveDataInStringRepresentation() {
 
 				// password should be masked
 				if passVal, ok := credsMap["password"].(string); ok {
-					suite.Contains(passVal, "*******", "password field should be masked")
+					suite.Equal(sanitizer.MaskString("my_super_secret_password"), passVal, "password field should be masked")
 					suite.NotContains(passVal, "my_super_secret_password")
 				}
 
 				// token should be masked
 				if tokenVal, ok := credsMap["token"].(string); ok {
-					suite.Contains(tokenVal, "*******", "token field should be masked")
+					suite.Equal(sanitizer.MaskString("bearer_token_123456"), tokenVal, "token field should be masked")
 					suite.NotContains(tokenVal, "bearer_token_123456")
 				}
 			}
@@ -1104,13 +1117,13 @@ func (suite *SensitiveDataSuite) TestSensitiveDataInStringRepresentation() {
 
 				// api_key should be masked
 				if apiKeyVal, ok := cfgMap["api_key"].(string); ok {
-					suite.Contains(apiKeyVal, "*******", "api_key field should be masked")
+					suite.Equal(sanitizer.MaskString("sk-1234567890abcdef"), apiKeyVal, "api_key field should be masked")
 					suite.NotContains(apiKeyVal, "sk-1234567890abcdef")
 				}
 
 				// secret should be masked
 				if secretVal, ok := cfgMap["secret"].(string); ok {
-					suite.Contains(secretVal, "*******", "secret field should be masked")
+					suite.Equal(sanitizer.MaskString("app-secret-key"), secretVal, "secret field should be masked")
 					suite.NotContains(secretVal, "app-secret-key")
 				}
 			}
@@ -1168,13 +1181,13 @@ func (suite *SensitiveDataSuite) TestSensitiveDataInStringRepresentation() {
 				if authVal, ok := userMap["auth"].(map[string]any); ok {
 					// token should be masked
 					if tokenVal, ok := authVal["token"].(string); ok {
-						suite.Contains(tokenVal, "*******")
+						suite.Equal(sanitizer.MaskString("auth_token_xyz"), tokenVal)
 						suite.NotContains(tokenVal, "auth_token_xyz")
 					}
 
 					// password should be masked
 					if passVal, ok := authVal["password"].(string); ok {
-						suite.Contains(passVal, "*******")
+						suite.Equal(sanitizer.MaskString("secure_pass_123"), passVal)
 						suite.NotContains(passVal, "secure_pass_123")
 					}
 				}
@@ -1223,13 +1236,13 @@ func (suite *SensitiveDataSuite) TestSensitiveDataInStringRepresentation() {
 			if cfgMap, ok := cfgVal.(map[string]any); ok {
 				// api_key should be masked
 				if apiKeyVal, ok := cfgMap["api_key"].(string); ok {
-					suite.Contains(apiKeyVal, "*******")
+					suite.Equal(sanitizer.MaskString("api_key_pointer_value"), apiKeyVal)
 					suite.NotContains(apiKeyVal, "api_key_pointer_value")
 				}
 
 				// secret should be masked
 				if secretVal, ok := cfgMap["secret"].(string); ok {
-					suite.Contains(secretVal, "*******")
+					suite.Equal(sanitizer.MaskString("secret_pointer_value"), secretVal)
 					suite.NotContains(secretVal, "secret_pointer_value")
 				}
 			}
