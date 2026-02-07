@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -1238,7 +1239,8 @@ func (suite *SensitiveDataSuite) TestSensitiveDataInStringRepresentation() {
 	// Test 4: Load test patterns from file to document current behavior
 	suite.Run("StringRepresentationPatterns", func() {
 		// Load test patterns from file
-		patterns, err := loadTestPatterns("/home/runner/work/tlog/tlog/test_patterns.txt")
+		patternsPath := filepath.Join("test_patterns.txt")
+		patterns, err := loadTestPatterns(patternsPath)
 		suite.Require().NoError(err, "Failed to load test patterns")
 		suite.Require().NotEmpty(patterns, "No test patterns loaded")
 
