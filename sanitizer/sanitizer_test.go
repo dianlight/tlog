@@ -318,6 +318,53 @@ func (s *SanitizerSuite) TestMaskNestedValueMixedNestedPayload() {
 	s.NotEqual("inner_secret", payload["password"])
 }
 
+func (s *SanitizerSuite) TestMaskNestedValueYAMLEdgeCases() {
+	tests := []struct {
+		name            string
+		input           string
+		wantContains    []string
+		wantNotContains []string
+	}{
+		{
+			name:            "yaml comment",
+			input:           "password: secret # keep",
+			wantContains:    []string{"# keep", "🔒"},
+			wantNotContains: []string{"secret"},
+		},
+		{
+			name:            "yaml comment only",
+			input:           "password: # keep",
+			wantContains:    []string{"# keep", "🔒"},
+			wantNotContains: []string{"secret"},
+		},
+		{
+			name:            "yaml quoted hash",
+			input:           "password: \"sec#ret\"",
+			wantContains:    []string{"\"", "🔒"},
+			wantNotContains: []string{"sec#ret"},
+		},
+		{
+			name:            "yaml list item comment",
+			input:           "- password: listSecret # list",
+			wantContains:    []string{"# list", "🔒"},
+			wantNotContains: []string{"listSecret"},
+		},
+	}
+
+	for _, tt := range tests {
+		s.Run(tt.name, func() {
+			result := sanitizer.MaskNestedValue(tt.input, "")
+			resultStr := fmt.Sprintf("%v", result)
+			for _, want := range tt.wantContains {
+				s.Contains(resultStr, want)
+			}
+			for _, notWant := range tt.wantNotContains {
+				s.NotContains(resultStr, notWant)
+			}
+		})
+	}
+}
+
 // --- MaskingHandler ---
 
 // testHandler is a simple slog.Handler for testing that captures the last record.

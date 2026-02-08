@@ -174,6 +174,226 @@ func maskRawQuery(query string) (string, bool) {
 	return strings.Join(parts, "&"), true
 }
 
+func tryMaskYAML(val string) (string, bool) {
+	if !strings.Contains(val, ":") {
+		return "", false
+	}
+
+	lines := strings.Split(val, "\n")
+	changed := false
+	blockActive := false
+	blockIndent := -1
+	pendingIndex := -1
+	pendingIsList := false
+	pendingKey := ""
+	pendingPrefix := ""
+	pendingHasContent := false
+
+	for i, line := range lines {
+		indent, prefix := leadingWhitespace(line)
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+
+		if blockActive {
+			if indent > blockIndent {
+				if maskedLine, ok := maskYAMLBlockLine(line, prefix); ok {
+					lines[i] = maskedLine
+					changed = true
+					pendingHasContent = true
+				}
+				continue
+			}
+			if pendingIndex != -1 && !pendingHasContent {
+				if pendingIsList {
+					lines[pendingIndex] = pendingPrefix + "- " + pendingKey + ": " + maskChar
+				} else {
+					lines[pendingIndex] = pendingPrefix + pendingKey + ": " + maskChar
+				}
+				changed = true
+			}
+			blockActive = false
+			blockIndent = -1
+			pendingIndex = -1
+			pendingIsList = false
+			pendingKey = ""
+			pendingPrefix = ""
+			pendingHasContent = false
+		}
+
+		isListItem := false
+		lineBody := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(lineBody, "- ") {
+			isListItem = true
+			lineBody = strings.TrimSpace(strings.TrimPrefix(lineBody, "- "))
+		}
+
+		key, rest, ok := strings.Cut(lineBody, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if key == "" || !isSensitiveKeyLike(key) {
+			continue
+		}
+
+		value := strings.TrimSpace(rest)
+		if value == "" || isYAMLBlockScalar(value) {
+			blockActive = true
+			blockIndent = indent
+			pendingIndex = i
+			pendingIsList = isListItem
+			pendingKey = key
+			pendingPrefix = prefix
+			pendingHasContent = false
+			continue
+		}
+
+		maskedValue, ok := maskYAMLScalar(value)
+		if !ok {
+			continue
+		}
+
+		if isListItem {
+			lines[i] = prefix + "- " + key + ": " + maskedValue
+		} else {
+			lines[i] = prefix + key + ": " + maskedValue
+		}
+		changed = true
+	}
+
+	if blockActive && pendingIndex != -1 && !pendingHasContent {
+		if pendingIsList {
+			lines[pendingIndex] = pendingPrefix + "- " + pendingKey + ": " + maskChar
+		} else {
+			lines[pendingIndex] = pendingPrefix + pendingKey + ": " + maskChar
+		}
+		changed = true
+	}
+
+	if !changed {
+		return "", false
+	}
+	return strings.Join(lines, "\n"), true
+}
+
+func leadingWhitespace(line string) (int, string) {
+	count := 0
+	for count < len(line) {
+		switch line[count] {
+		case ' ', '\t':
+			count++
+		default:
+			return count, line[:count]
+		}
+	}
+	return count, line
+}
+
+func isYAMLBlockScalar(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "|" || trimmed == ">" {
+		return true
+	}
+	return strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, ">")
+}
+
+func splitYAMLComment(value string) (string, string, bool) {
+	inSingle := false
+	inDouble := false
+	for i := 0; i < len(value); i++ {
+		switch value[i] {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			if inSingle || inDouble {
+				continue
+			}
+			start := i
+			for start > 0 {
+				prev := value[start-1]
+				if prev != ' ' && prev != '\t' {
+					break
+				}
+				start--
+			}
+			if start == i {
+				if i == 0 {
+					return "", value, true
+				}
+				return value, "", false
+			}
+			content := strings.TrimRight(value[:start], " \t")
+			return content, value[start:], true
+		}
+	}
+	return value, "", false
+}
+
+func maskYAMLScalar(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "", false
+	}
+
+	content, comment, hasComment := splitYAMLComment(trimmed)
+	if hasComment {
+		if strings.TrimSpace(content) == "" {
+			return maskChar + comment, true
+		}
+		masked, ok := maskYAMLScalarContent(content)
+		if !ok {
+			return "", false
+		}
+		return masked + comment, true
+	}
+
+	return maskYAMLScalarContent(trimmed)
+}
+
+func maskYAMLScalarContent(trimmed string) (string, bool) {
+
+	if masked, ok := maskKeyValuePairs(trimmed); ok {
+		return masked, true
+	}
+
+	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") && len(trimmed) >= 2 {
+		inner := trimmed[1 : len(trimmed)-1]
+		return "\"" + MaskString(inner) + "\"", true
+	}
+	if strings.HasPrefix(trimmed, "'") && strings.HasSuffix(trimmed, "'") && len(trimmed) >= 2 {
+		inner := trimmed[1 : len(trimmed)-1]
+		return "'" + MaskString(inner) + "'", true
+	}
+
+	return MaskString(trimmed), true
+}
+
+func maskYAMLBlockLine(line, prefix string) (string, bool) {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return line, false
+	}
+
+	lineBody := strings.TrimLeft(line, " \t")
+	if strings.HasPrefix(lineBody, "- ") {
+		item := strings.TrimSpace(strings.TrimPrefix(lineBody, "- "))
+		if item == "" {
+			return line, false
+		}
+		return prefix + "- " + MaskString(item), true
+	}
+
+	return prefix + MaskString(trimmed), true
+}
+
 func maskXMLTags(val string) (string, bool) {
 	matches := xmlTagPattern.FindAllStringSubmatchIndex(val, -1)
 	if len(matches) == 0 {
@@ -266,6 +486,9 @@ func maskStringValue(val string) string {
 	if strings.Contains(val, `\n`) || strings.Contains(val, `\t`) || strings.Contains(val, `\r`) {
 		replacer := strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")
 		normalized = replacer.Replace(val)
+	}
+	if masked, ok := tryMaskYAML(normalized); ok {
+		return masked
 	}
 	if masked, ok := maskXMLTags(normalized); ok {
 		return masked

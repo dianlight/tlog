@@ -34,6 +34,17 @@ XML token attribute|<session token="sessionToken456" user="john"/>|sessionToken4
 # YAML-like patterns
 YAML password|user: john\npassword: yamlSecret\nemail: test@test.com|yamlSecret
 YAML nested|auth:\n  password: nested123\n  token: tok789|nested123,tok789
+YAML inline map|auth: {password: inlineSecret, token: tokInline}|inlineSecret,tokInline
+YAML list of objects|users:\n  - name: john\n    password: listPass1\n  - name: jane\n    token: listTok2|listPass1,listTok2
+YAML quoted values|password: "quotedSecret"\napi_key: 'keyQuoted123'|quotedSecret,keyQuoted123
+YAML with tabs|user:\tjohn\npassword:\tsecretTab|secretTab
+YAML anchors|defaults: &defaults\n  password: anchorSecret\nuser1:\n  <<: *defaults|anchorSecret
+YAML multi-line literal|password: |\n  lineOneSecret\n  lineTwo|lineOneSecret\n  lineTwo
+YAML multi-line folded|password: >\n  foldedSecret\n  continues|foldedSecret continues
+YAML nested map|auth:\n  credentials:\n    password: deepSecret|deepSecret
+YAML token in list|tokens:\n  - tokA\n  - tokB\n  - tokC|tokA,tokB,tokC
+YAML key with underscore|api_key: key_underscore_123|key_underscore_123
+YAML mixed spacing|password :mixedSpaceSecret|mixedSpaceSecret
 
 # Edge cases
 Password at start|password:firstSecret user:john|firstSecret
