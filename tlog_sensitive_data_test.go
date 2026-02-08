@@ -1323,6 +1323,18 @@ type TestPattern struct {
 	ExpectedMaskedParts []string
 }
 
+func normalizePatternString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+		return value
+	}
+	if !strings.Contains(value, `\n`) && !strings.Contains(value, `\t`) && !strings.Contains(value, `\r`) {
+		return value
+	}
+	replacer := strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")
+	return replacer.Replace(value)
+}
+
 // loadTestPatterns loads test patterns from a file
 func loadTestPatterns(filename string) ([]TestPattern, error) {
 	file, err := os.Open(filename)
@@ -1345,21 +1357,31 @@ func loadTestPatterns(filename string) ([]TestPattern, error) {
 		}
 
 		// Parse line: description|test_string|expected_masked_parts
-		parts := strings.Split(line, "|")
-		if len(parts) < 2 {
+		firstSep := strings.Index(line, "|")
+		if firstSep == -1 {
 			continue // Skip malformed lines
+		}
+		lastSep := strings.LastIndex(line, "|")
+		description := line[:firstSep]
+		testString := ""
+		expected := ""
+		if lastSep == firstSep {
+			testString = line[firstSep+1:]
+		} else {
+			testString = line[firstSep+1 : lastSep]
+			expected = line[lastSep+1:]
 		}
 
 		pattern := TestPattern{
-			Description: parts[0],
-			TestString:  parts[1],
+			Description: description,
+			TestString:  normalizePatternString(testString),
 		}
 
-		if len(parts) >= 3 && parts[2] != "" {
-			pattern.ExpectedMaskedParts = strings.Split(parts[2], ",")
+		if expected != "" {
+			pattern.ExpectedMaskedParts = strings.Split(expected, ",")
 			// Trim whitespace from each part
 			for i := range pattern.ExpectedMaskedParts {
-				pattern.ExpectedMaskedParts[i] = strings.TrimSpace(pattern.ExpectedMaskedParts[i])
+				pattern.ExpectedMaskedParts[i] = normalizePatternString(strings.TrimSpace(pattern.ExpectedMaskedParts[i]))
 			}
 		}
 

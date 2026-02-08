@@ -178,6 +178,9 @@ func tryMaskYAML(val string) (string, bool) {
 	if !strings.Contains(val, ":") {
 		return "", false
 	}
+	if shouldSkipYAMLInline(val) {
+		return "", false
+	}
 
 	lines := strings.Split(val, "\n")
 	changed := false
@@ -188,6 +191,8 @@ func tryMaskYAML(val string) (string, bool) {
 	pendingKey := ""
 	pendingPrefix := ""
 	pendingHasContent := false
+	pendingBlockStyle := ""
+	var pendingBlockLines []string
 
 	for i, line := range lines {
 		indent, prefix := leadingWhitespace(line)
@@ -198,12 +203,24 @@ func tryMaskYAML(val string) (string, bool) {
 
 		if blockActive {
 			if indent > blockIndent {
+				pendingBlockLines = append(pendingBlockLines, strings.TrimRight(line, " \t"))
 				if maskedLine, ok := maskYAMLBlockLine(line, prefix); ok {
 					lines[i] = maskedLine
 					changed = true
 					pendingHasContent = true
 				}
 				continue
+			}
+			if pendingIndex != -1 && pendingHasContent {
+				if combined, ok := buildYAMLBlockContent(pendingBlockLines, pendingBlockStyle); ok {
+					maskedCombined := MaskString(combined)
+					if pendingIsList {
+						lines[pendingIndex] = pendingPrefix + "- " + pendingKey + ": " + maskedCombined
+					} else {
+						lines[pendingIndex] = pendingPrefix + pendingKey + ": " + maskedCombined
+					}
+					changed = true
+				}
 			}
 			if pendingIndex != -1 && !pendingHasContent {
 				if pendingIsList {
@@ -220,6 +237,8 @@ func tryMaskYAML(val string) (string, bool) {
 			pendingKey = ""
 			pendingPrefix = ""
 			pendingHasContent = false
+			pendingBlockStyle = ""
+			pendingBlockLines = nil
 		}
 
 		isListItem := false
@@ -247,6 +266,8 @@ func tryMaskYAML(val string) (string, bool) {
 			pendingKey = key
 			pendingPrefix = prefix
 			pendingHasContent = false
+			pendingBlockStyle = strings.TrimSpace(value)
+			pendingBlockLines = nil
 			continue
 		}
 
@@ -263,6 +284,17 @@ func tryMaskYAML(val string) (string, bool) {
 		changed = true
 	}
 
+	if blockActive && pendingIndex != -1 && pendingHasContent {
+		if combined, ok := buildYAMLBlockContent(pendingBlockLines, pendingBlockStyle); ok {
+			maskedCombined := MaskString(combined)
+			if pendingIsList {
+				lines[pendingIndex] = pendingPrefix + "- " + pendingKey + ": " + maskedCombined
+			} else {
+				lines[pendingIndex] = pendingPrefix + pendingKey + ": " + maskedCombined
+			}
+			changed = true
+		}
+	}
 	if blockActive && pendingIndex != -1 && !pendingHasContent {
 		if pendingIsList {
 			lines[pendingIndex] = pendingPrefix + "- " + pendingKey + ": " + maskChar
@@ -297,6 +329,61 @@ func isYAMLBlockScalar(value string) bool {
 		return true
 	}
 	return strings.HasPrefix(trimmed, "|") || strings.HasPrefix(trimmed, ">")
+}
+
+func shouldSkipYAMLInline(val string) bool {
+	trimmed := strings.TrimSpace(val)
+	if strings.Contains(trimmed, "\n") {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "map[") {
+		return true
+	}
+
+	lineBody := strings.TrimLeft(trimmed, " \t")
+	if strings.HasPrefix(lineBody, "- ") {
+		lineBody = strings.TrimSpace(strings.TrimPrefix(lineBody, "- "))
+	}
+
+	_, rest, ok := strings.Cut(lineBody, ":")
+	if !ok {
+		return false
+	}
+	restTrim := strings.TrimSpace(rest)
+	if restTrim == "" || isYAMLBlockScalar(restTrim) {
+		return false
+	}
+	if strings.HasPrefix(restTrim, "{") || strings.HasPrefix(restTrim, "[") {
+		return false
+	}
+
+	return keyValuePattern.MatchString(restTrim)
+}
+
+func buildYAMLBlockContent(lines []string, style string) (string, bool) {
+	if len(lines) == 0 {
+		return "", false
+	}
+	trimmedStyle := strings.TrimSpace(style)
+	isFolded := strings.HasPrefix(trimmedStyle, ">")
+
+	if isFolded {
+		parts := make([]string, 0, len(lines))
+		for _, line := range lines {
+			parts = append(parts, strings.TrimSpace(line))
+		}
+		return strings.Join(parts, " "), true
+	}
+
+	parts := make([]string, 0, len(lines))
+	for i, line := range lines {
+		content := strings.TrimRight(line, " \t")
+		if i == 0 {
+			content = strings.TrimLeft(content, " \t")
+		}
+		parts = append(parts, content)
+	}
+	return strings.Join(parts, "\n"), true
 }
 
 func splitYAMLComment(value string) (string, string, bool) {

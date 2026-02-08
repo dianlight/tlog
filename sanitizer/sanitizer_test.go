@@ -17,6 +17,18 @@ type SanitizerSuite struct {
 	suite.Suite
 }
 
+func normalizePatternString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+		return value
+	}
+	if !strings.Contains(value, `\n`) && !strings.Contains(value, `\t`) && !strings.Contains(value, `\r`) {
+		return value
+	}
+	replacer := strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")
+	return replacer.Replace(value)
+}
+
 func TestSanitizerSuite(t *testing.T) {
 	suite.Run(t, new(SanitizerSuite))
 }
@@ -456,13 +468,19 @@ func (s *SanitizerSuite) TestMaskNestedValueFromFile() {
 		}
 
 		// Parse format: "input|keyHint|expectedContainsMask"
-		parts := strings.Split(line, "|")
-		if len(parts) < 2 {
+		firstSep := strings.Index(line, "|")
+		if firstSep == -1 {
 			continue
 		}
-
-		testName := parts[0]
-		input := parts[1]
+		lastSep := strings.LastIndex(line, "|")
+		testName := line[:firstSep]
+		input := ""
+		if lastSep == firstSep {
+			input = line[firstSep+1:]
+		} else {
+			input = line[firstSep+1 : lastSep]
+		}
+		input = normalizePatternString(input)
 
 		s.Run(testName, func() {
 			result := sanitizer.MaskNestedValue(input, "")
