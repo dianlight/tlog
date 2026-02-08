@@ -15,6 +15,18 @@ import (
 
 const maskChar = "🔒"
 
+func isFullyMasked(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if string(r) != maskChar {
+			return false
+		}
+	}
+	return true
+}
+
 // SensitiveKeys holds keys considered sensitive for masking.
 var SensitiveKeys = map[string]struct{}{
 	"password": {}, "pwd": {}, "pass": {}, "passwd": {},
@@ -29,8 +41,10 @@ func MaskString(s string) string {
 	return strings.Repeat(maskChar, len(s))
 }
 
-var xmlTagPattern = regexp.MustCompile(`(?i)<\s*([A-Za-z0-9_.-]+)\s*>([^<]*)<\s*/\s*([A-Za-z0-9_.-]+)\s*>`)
-var keyValuePattern = regexp.MustCompile(`(?i)(^|[\s,{\[])("?([A-Za-z0-9_.-]+)"?)\s*[:=]\s*("([^"]*)"|'([^']*)'|([^\s,\]}]+))`)
+var xmlTagPattern = regexp.MustCompile(`(?i)<\s*([A-Za-z0-9_.:-]+)\s*>([^<]*)<\s*/\s*([A-Za-z0-9_.:-]+)\s*>`)
+var xmlCDataPattern = regexp.MustCompile(`(?is)<\s*([A-Za-z0-9_.:-]+)\s*>\s*<!\[CDATA\[(.*?)\]\]>\s*<\s*/\s*([A-Za-z0-9_.:-]+)\s*>`)
+var xmlAttrPattern = regexp.MustCompile(`(?i)(\s+)([A-Za-z0-9_.:-]+)\s*=\s*("([^"]*)"|'([^']*)')`)
+var keyValuePattern = regexp.MustCompile(`(?i)(^|[\s,;{\[])"?([A-Za-z0-9_.:-]+)"?\s*[:=]\s*("([^"]*)"|'([^']*)'|([^\s,\]};]+))`)
 
 func isSensitiveKeyLike(key string) bool {
 	if key == "" {
@@ -46,6 +60,39 @@ func isSensitiveKeyLike(key string) bool {
 		}
 	}
 	return false
+}
+
+func adjustSensitiveJSONKeys(original any, masked any) any {
+	switch ov := original.(type) {
+	case map[string]any:
+		maskedMap, _ := masked.(map[string]any)
+		out := make(map[string]any, len(ov))
+		for k, v := range ov {
+			mv := maskedMap[k]
+			adjustedValue := adjustSensitiveJSONKeys(v, mv)
+			newKey := k
+			if isSensitiveKeyLike(k) {
+				if sv, ok := v.(string); ok && strings.EqualFold(sv, k) {
+					newKey = MaskString(k)
+				}
+			}
+			out[newKey] = adjustedValue
+		}
+		return out
+	case []any:
+		maskedSlice, _ := masked.([]any)
+		out := make([]any, len(ov))
+		for i := range ov {
+			var mv any
+			if i < len(maskedSlice) {
+				mv = maskedSlice[i]
+			}
+			out[i] = adjustSensitiveJSONKeys(ov[i], mv)
+		}
+		return out
+	default:
+		return masked
+	}
 }
 
 func tryMaskJSON(val string) (string, bool) {
@@ -71,7 +118,8 @@ func tryMaskJSON(val string) (string, bool) {
 	var parsed any
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
 		masked := MaskNestedValue(parsed, "")
-		bytes, err := json.Marshal(masked)
+		adjusted := adjustSensitiveJSONKeys(parsed, masked)
+		bytes, err := json.Marshal(adjusted)
 		if err == nil {
 			return string(bytes), true
 		}
@@ -82,7 +130,8 @@ func tryMaskJSON(val string) (string, bool) {
 		unescaped = strings.ReplaceAll(unescaped, `\\`, `\`)
 		if err := json.Unmarshal([]byte(unescaped), &parsed); err == nil {
 			masked := MaskNestedValue(parsed, "")
-			bytes, err := json.Marshal(masked)
+			adjusted := adjustSensitiveJSONKeys(parsed, masked)
+			bytes, err := json.Marshal(adjusted)
 			if err == nil {
 				return string(bytes), true
 			}
@@ -97,7 +146,9 @@ func tryMaskURL(val string) (string, bool) {
 	if trimmed == "" {
 		return "", false
 	}
-	if !(strings.Contains(trimmed, "://") || strings.Contains(trimmed, "?") || strings.Contains(trimmed, "@")) {
+	isURLish := strings.Contains(trimmed, "://") || strings.Contains(trimmed, "?") || strings.Contains(trimmed, "@") || strings.Contains(trimmed, "#")
+	hasSemicolon := strings.Contains(trimmed, ";")
+	if !(isURLish || (hasSemicolon && strings.Contains(trimmed, "/"))) {
 		return "", false
 	}
 
@@ -121,10 +172,28 @@ func tryMaskURL(val string) (string, bool) {
 		}
 	}
 
-	if queryIndex := strings.Index(masked, "?"); queryIndex != -1 {
+	queryIndex := strings.Index(masked, "?")
+	fragmentIndex := strings.Index(masked, "#")
+	pathEnd := len(masked)
+	if queryIndex != -1 && (fragmentIndex == -1 || queryIndex < fragmentIndex) {
+		pathEnd = queryIndex
+	}
+	if fragmentIndex != -1 && (queryIndex == -1 || fragmentIndex < queryIndex) {
+		pathEnd = fragmentIndex
+	}
+
+	if semiIndex := strings.Index(masked[:pathEnd], ";"); semiIndex != -1 {
+		params := masked[semiIndex+1 : pathEnd]
+		if maskedParams, ok := maskDelimitedParams(params, ";"); ok {
+			masked = masked[:semiIndex+1] + maskedParams + masked[pathEnd:]
+			changed = true
+		}
+	}
+
+	if queryIndex != -1 {
 		end := len(masked)
-		if fragmentIndex := strings.Index(masked[queryIndex+1:], "#"); fragmentIndex != -1 {
-			end = queryIndex + 1 + fragmentIndex
+		if fragmentIndex != -1 && fragmentIndex > queryIndex {
+			end = fragmentIndex
 		}
 		query := masked[queryIndex+1 : end]
 		if maskedQuery, ok := maskRawQuery(query); ok {
@@ -133,10 +202,52 @@ func tryMaskURL(val string) (string, bool) {
 		}
 	}
 
+	if fragmentIndex != -1 {
+		fragment := masked[fragmentIndex+1:]
+		if maskedFragment, ok := maskRawQuery(fragment); ok {
+			masked = masked[:fragmentIndex+1] + maskedFragment
+			changed = true
+		}
+	}
+
 	if !changed {
 		return "", false
 	}
 	return masked, true
+}
+
+func maskDelimitedParams(params, sep string) (string, bool) {
+	if params == "" {
+		return params, false
+	}
+	parts := strings.Split(params, sep)
+	changed := false
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if key, value, ok := strings.Cut(part, "="); ok {
+			if isSensitiveKeyLike(key) && value != "" {
+				parts[i] = key + "=" + MaskString(value)
+				changed = true
+				continue
+			}
+		}
+
+		decoded, err := url.QueryUnescape(part)
+		if err != nil {
+			continue
+		}
+		if key, value, ok := strings.Cut(decoded, "="); ok && isSensitiveKeyLike(key) {
+			parts[i] = key + "=" + MaskString(value)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return params, false
+	}
+	return strings.Join(parts, sep), true
 }
 
 func maskRawQuery(query string) (string, bool) {
@@ -482,7 +593,80 @@ func maskYAMLBlockLine(line, prefix string) (string, bool) {
 }
 
 func maskXMLTags(val string) (string, bool) {
-	matches := xmlTagPattern.FindAllStringSubmatchIndex(val, -1)
+	masked := val
+	changed := false
+
+	if attrMasked, ok := maskXMLAttributes(masked); ok {
+		masked = attrMasked
+		changed = true
+	}
+
+	if cdataMasked, ok := maskXMLTagContent(masked, xmlCDataPattern); ok {
+		masked = cdataMasked
+		changed = true
+	}
+
+	if textMasked, ok := maskXMLTagContent(masked, xmlTagPattern); ok {
+		masked = textMasked
+		changed = true
+	}
+
+	if !changed {
+		return val, false
+	}
+	return masked, true
+}
+
+func maskXMLAttributes(val string) (string, bool) {
+	matches := xmlAttrPattern.FindAllStringSubmatchIndex(val, -1)
+	if len(matches) == 0 {
+		return val, false
+	}
+
+	var b strings.Builder
+	last := 0
+	changed := false
+	for _, match := range matches {
+		keyStart, keyEnd := match[4], match[5]
+		if keyStart < 0 {
+			continue
+		}
+		key := val[keyStart:keyEnd]
+		if !isSensitiveKeyLike(key) {
+			continue
+		}
+
+		valueStart, valueEnd := -1, -1
+		if len(match) >= 10 && match[8] >= 0 {
+			valueStart = match[8]
+			valueEnd = match[9]
+		}
+		if valueStart < 0 && len(match) >= 12 && match[10] >= 0 {
+			valueStart = match[10]
+			valueEnd = match[11]
+		}
+		if valueStart < 0 {
+			continue
+		}
+		if isFullyMasked(val[valueStart:valueEnd]) {
+			continue
+		}
+
+		b.WriteString(val[last:valueStart])
+		b.WriteString(MaskString(val[valueStart:valueEnd]))
+		last = valueEnd
+		changed = true
+	}
+
+	if !changed {
+		return val, false
+	}
+	b.WriteString(val[last:])
+	return b.String(), true
+}
+
+func maskXMLTagContent(val string, pattern *regexp.Regexp) (string, bool) {
+	matches := pattern.FindAllStringSubmatchIndex(val, -1)
 	if len(matches) == 0 {
 		return val, false
 	}
@@ -527,7 +711,10 @@ func maskKeyValuePairs(val string) (string, bool) {
 	last := 0
 	changed := false
 	for _, match := range matches {
-		keyStart, keyEnd := match[6], match[7]
+		if len(match) < 6 {
+			continue
+		}
+		keyStart, keyEnd := match[4], match[5]
 		if keyStart < 0 {
 			continue
 		}
@@ -537,14 +724,17 @@ func maskKeyValuePairs(val string) (string, bool) {
 		}
 
 		valueStart, valueEnd := -1, -1
-		for _, group := range []int{5, 6, 7} {
-			start := match[2*group]
-			end := match[2*group+1]
-			if start >= 0 {
-				valueStart = start
-				valueEnd = end
-				break
-			}
+		if len(match) >= 10 && match[8] >= 0 {
+			valueStart = match[8]
+			valueEnd = match[9]
+		}
+		if valueStart < 0 && len(match) >= 12 && match[10] >= 0 {
+			valueStart = match[10]
+			valueEnd = match[11]
+		}
+		if valueStart < 0 && len(match) >= 14 && match[12] >= 0 {
+			valueStart = match[12]
+			valueEnd = match[13]
 		}
 		if valueStart < 0 {
 			continue
@@ -575,6 +765,11 @@ func maskStringValue(val string) string {
 		normalized = replacer.Replace(val)
 	}
 	if masked, ok := tryMaskYAML(normalized); ok {
+		if strings.Contains(masked, "=") {
+			if kvMasked, kvOk := maskKeyValuePairs(masked); kvOk {
+				return kvMasked
+			}
+		}
 		return masked
 	}
 	if masked, ok := maskXMLTags(normalized); ok {
@@ -616,13 +811,19 @@ func MaskNestedValue(v any, keyHint string) any {
 	case map[string]any:
 		out := make(map[string]any, len(val))
 		for k, vv := range val {
+			if isSensitiveKeyLike(k) {
+				if sv, ok := vv.(string); ok {
+					out[k] = MaskString(sv)
+					continue
+				}
+			}
 			out[k] = MaskNestedValue(vv, k)
 		}
 		return out
 	case map[string]string:
 		out := make(map[string]string, len(val))
 		for k, vv := range val {
-			if _, ok := SensitiveKeys[k]; ok {
+			if isSensitiveKeyLike(k) {
 				out[k] = MaskString(vv)
 			} else {
 				out[k] = vv
