@@ -4,8 +4,10 @@ package sanitizer
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -50,6 +52,30 @@ func MaskNestedValue(v any, keyHint string) any {
 	}
 
 	switch val := v.(type) {
+	case string:
+		// if string starts with "\"" and ends with "\"", it might be a JSON-encoded string, so try to unquote it first
+		if strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"") {
+			unquoted, err := strconv.Unquote(val)
+			if err == nil {
+				return MaskNestedValue(unquoted, "")
+			}
+		}
+		// check if the string itself looks like a JSON object and try to parse it
+		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
+			var parsed any
+			if err := json.Unmarshal([]byte(val), &parsed); err == nil {
+				return MaskNestedValue(parsed, "")
+			} else {
+				// try to unescape common JSON escape sequences and parse again
+				unescaped := strings.ReplaceAll(val, `\"`, `"`)
+				unescaped = strings.ReplaceAll(unescaped, `\\`, `\`)
+				if err := json.Unmarshal([]byte(unescaped), &parsed); err == nil {
+					return MaskNestedValue(parsed, "")
+				}
+			}
+		}
+
+		return val
 	case map[string]any:
 		out := make(map[string]any, len(val))
 		for k, vv := range val {

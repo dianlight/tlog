@@ -2,7 +2,10 @@ package sanitizer_test
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -391,4 +394,35 @@ func (s *SanitizerSuite) TestMaskingHandlerWithGroup() {
 
 	newHandler := mh.WithGroup("group1")
 	s.IsType(&sanitizer.MaskingHandler{}, newHandler)
+}
+
+func (s *SanitizerSuite) TestMaskNestedValueFromFile() {
+	// Load test patterns from file
+	data, err := os.ReadFile("../test_patterns.txt")
+	s.NoError(err)
+
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Parse format: "input|keyHint|expectedContainsMask"
+		parts := strings.Split(line, "|")
+		if len(parts) < 2 {
+			continue
+		}
+
+		testName := parts[0]
+		input := parts[1]
+
+		s.Run(testName, func() {
+			result := sanitizer.MaskNestedValue(input, "")
+			resultStr := fmt.Sprintf("%v", result)
+
+			s.NotEqual(input, resultStr, "input %q should be masked", input)
+			s.Contains(resultStr, "🔒", "masked result should contain lock emoji")
+		})
+	}
 }

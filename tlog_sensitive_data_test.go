@@ -1297,9 +1297,19 @@ func (suite *SensitiveDataSuite) TestSensitiveDataInStringRepresentation() {
 					suite.T().Logf("Original: %s", pattern.TestString)
 					suite.T().Logf("Logged: %s", rawStr)
 
-					// NOTE: Current implementation does NOT scan string content for patterns
-					// It only masks values when the field name matches a sensitive key
-					// This test documents this limitation for future reference
+					if len(pattern.ExpectedMaskedParts) == 0 {
+						suite.T().Logf("No expected masked parts for pattern: %s", pattern.Description)
+						return
+					}
+
+					for _, expected := range pattern.ExpectedMaskedParts {
+						if expected == "" {
+							continue
+						}
+						suite.Require().NotContains(rawStr, expected, "expected %q to be masked in %q", expected, pattern.Description)
+						suite.Require().Contains(rawStr, sanitizer.MaskString(expected), "expected masked value for %q in %q", expected, pattern.Description)
+					}
+
 				}
 			})
 		}

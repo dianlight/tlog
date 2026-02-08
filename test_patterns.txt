@@ -8,10 +8,13 @@ JSON token field|{"session":{"token":"abc123xyz","userId":42}}|abc123xyz
 JSON nested password|{"auth":{"credentials":{"password":"SuperSecret!"}}}|SuperSecret!
 JSON api_key field|{"config":{"api_key":"sk-1234567890abcdef"}}|sk-1234567890abcdef
 JSON encoded|{\"config\":{\"api_key\":\"sk-1234567890abcdef\"}}|sk-1234567890abcdef
-Query string with encoded api_key|/search?params=q%3Dtest&api_key%3Dkey_12345|key_12345
+JSON with special chars|{"user":"john","password":"p@ssw0rd!","email":""}
+JSON ebcoded 2|"{\n  \"HASmbPassword\": {},\n  \"allow_guest\": null,\n  \"allow_hosts\": [\n    \"token=tok_123\"\n  ],\n  \"bind_all_interfaces\": false,\n  \"compatibility_mode\": false,\n  \"export_stats_to_ha\": null,\n  \"ha_use_nfs\": null,\n  \"hdidle_default_command_type\": {},\n  \"hdidle_default_idle_time\": 0,\n  \"hdidle_default_power_condition\": 0,\n  \"hdidle_enabled\": null,\n  \"hdidle_ignore_spin_down_detection\": false,\n  \"hostname\": \"user@example.com\",\n  \"interfaces\": [],\n  \"local_master\": null,\n  \"multi_channel\": false,\n  \"smb_over_quic\": null,\n  \"telemetry_mode\": {},\n  \"workgroup\": \"password=Secret123\"\n}"|tok_123,Secret123
+JSON invalid|{"user":"john","password":"p@ssw0rd!","email":"}
 
 # URL-like patterns
 URL with password|https://user:myPassword@example.com/api|myPassword
+Query string with encoded api_key|/search?params=q%3Dtest&api_key%3Dkey_12345|key_12345
 Query string with token|/api/data?token=xyz789&user=test|xyz789
 Query string with api_key|/search?q=test&api_key=key_12345|key_12345
 
