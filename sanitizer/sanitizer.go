@@ -6,7 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/url"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -25,6 +27,253 @@ var SensitiveKeys = map[string]struct{}{
 
 func MaskString(s string) string {
 	return strings.Repeat(maskChar, len(s))
+}
+
+var xmlTagPattern = regexp.MustCompile(`(?i)<\s*([A-Za-z0-9_.-]+)\s*>([^<]*)<\s*/\s*([A-Za-z0-9_.-]+)\s*>`)
+var keyValuePattern = regexp.MustCompile(`(?i)(^|[\s,{\[])("?([A-Za-z0-9_.-]+)"?)\s*[:=]\s*("([^"]*)"|'([^']*)'|([^\s,\]}]+))`)
+
+func isSensitiveKeyLike(key string) bool {
+	if key == "" {
+		return false
+	}
+	key = strings.ToLower(key)
+	if _, ok := SensitiveKeys[key]; ok {
+		return true
+	}
+	for k := range SensitiveKeys {
+		if strings.Contains(key, k) {
+			return true
+		}
+	}
+	return false
+}
+
+func tryMaskJSON(val string) (string, bool) {
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" {
+		return "", false
+	}
+
+	if strings.HasPrefix(trimmed, "\"") && strings.HasSuffix(trimmed, "\"") {
+		unquoted, err := strconv.Unquote(trimmed)
+		if err == nil {
+			if masked, ok := tryMaskJSON(unquoted); ok {
+				return strconv.Quote(masked), true
+			}
+		}
+	}
+
+	if !(strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") ||
+		strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]")) {
+		return "", false
+	}
+
+	var parsed any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err == nil {
+		masked := MaskNestedValue(parsed, "")
+		bytes, err := json.Marshal(masked)
+		if err == nil {
+			return string(bytes), true
+		}
+	}
+
+	if strings.Contains(trimmed, `\"`) || strings.Contains(trimmed, `\\`) {
+		unescaped := strings.ReplaceAll(trimmed, `\"`, `"`)
+		unescaped = strings.ReplaceAll(unescaped, `\\`, `\`)
+		if err := json.Unmarshal([]byte(unescaped), &parsed); err == nil {
+			masked := MaskNestedValue(parsed, "")
+			bytes, err := json.Marshal(masked)
+			if err == nil {
+				return string(bytes), true
+			}
+		}
+	}
+
+	return "", false
+}
+
+func tryMaskURL(val string) (string, bool) {
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" {
+		return "", false
+	}
+	if !(strings.Contains(trimmed, "://") || strings.Contains(trimmed, "?") || strings.Contains(trimmed, "@")) {
+		return "", false
+	}
+
+	masked := trimmed
+	changed := false
+
+	if schemeIndex := strings.Index(masked, "://"); schemeIndex != -1 {
+		afterScheme := masked[schemeIndex+3:]
+		atIndex := strings.Index(afterScheme, "@")
+		if atIndex != -1 {
+			userinfo := afterScheme[:atIndex]
+			if colonIndex := strings.Index(userinfo, ":"); colonIndex != -1 {
+				user := userinfo[:colonIndex]
+				pass := userinfo[colonIndex+1:]
+				if pass != "" {
+					maskedUserinfo := user + ":" + MaskString(pass)
+					masked = masked[:schemeIndex+3] + maskedUserinfo + "@" + afterScheme[atIndex+1:]
+					changed = true
+				}
+			}
+		}
+	}
+
+	if queryIndex := strings.Index(masked, "?"); queryIndex != -1 {
+		end := len(masked)
+		if fragmentIndex := strings.Index(masked[queryIndex+1:], "#"); fragmentIndex != -1 {
+			end = queryIndex + 1 + fragmentIndex
+		}
+		query := masked[queryIndex+1 : end]
+		if maskedQuery, ok := maskRawQuery(query); ok {
+			masked = masked[:queryIndex+1] + maskedQuery + masked[end:]
+			changed = true
+		}
+	}
+
+	if !changed {
+		return "", false
+	}
+	return masked, true
+}
+
+func maskRawQuery(query string) (string, bool) {
+	if query == "" {
+		return query, false
+	}
+
+	parts := strings.Split(query, "&")
+	changed := false
+	for i, part := range parts {
+		if part == "" {
+			continue
+		}
+		if key, value, ok := strings.Cut(part, "="); ok {
+			if isSensitiveKeyLike(key) && value != "" {
+				parts[i] = key + "=" + MaskString(value)
+				changed = true
+				continue
+			}
+		}
+
+		decoded, err := url.QueryUnescape(part)
+		if err != nil {
+			continue
+		}
+		if key, value, ok := strings.Cut(decoded, "="); ok && isSensitiveKeyLike(key) {
+			parts[i] = key + "=" + MaskString(value)
+			changed = true
+		}
+	}
+
+	if !changed {
+		return query, false
+	}
+	return strings.Join(parts, "&"), true
+}
+
+func maskXMLTags(val string) (string, bool) {
+	matches := xmlTagPattern.FindAllStringSubmatchIndex(val, -1)
+	if len(matches) == 0 {
+		return val, false
+	}
+
+	var b strings.Builder
+	last := 0
+	changed := false
+	for _, match := range matches {
+		keyStart, keyEnd := match[2], match[3]
+		valueStart, valueEnd := match[4], match[5]
+		endKeyStart, endKeyEnd := match[6], match[7]
+		if keyStart < 0 || valueStart < 0 || endKeyStart < 0 {
+			continue
+		}
+		key := val[keyStart:keyEnd]
+		endKey := val[endKeyStart:endKeyEnd]
+		if !strings.EqualFold(key, endKey) {
+			continue
+		}
+		if !isSensitiveKeyLike(key) {
+			continue
+		}
+		b.WriteString(val[last:valueStart])
+		b.WriteString(MaskString(val[valueStart:valueEnd]))
+		last = valueEnd
+		changed = true
+	}
+	if !changed {
+		return val, false
+	}
+	b.WriteString(val[last:])
+	return b.String(), true
+}
+
+func maskKeyValuePairs(val string) (string, bool) {
+	matches := keyValuePattern.FindAllStringSubmatchIndex(val, -1)
+	if len(matches) == 0 {
+		return val, false
+	}
+
+	var b strings.Builder
+	last := 0
+	changed := false
+	for _, match := range matches {
+		keyStart, keyEnd := match[6], match[7]
+		if keyStart < 0 {
+			continue
+		}
+		key := val[keyStart:keyEnd]
+		if !isSensitiveKeyLike(key) {
+			continue
+		}
+
+		valueStart, valueEnd := -1, -1
+		for _, group := range []int{5, 6, 7} {
+			start := match[2*group]
+			end := match[2*group+1]
+			if start >= 0 {
+				valueStart = start
+				valueEnd = end
+				break
+			}
+		}
+		if valueStart < 0 {
+			continue
+		}
+
+		b.WriteString(val[last:valueStart])
+		b.WriteString(MaskString(val[valueStart:valueEnd]))
+		last = valueEnd
+		changed = true
+	}
+	if !changed {
+		return val, false
+	}
+	b.WriteString(val[last:])
+	return b.String(), true
+}
+
+func maskStringValue(val string) string {
+	if masked, ok := tryMaskJSON(val); ok {
+		return masked
+	}
+	if masked, ok := tryMaskURL(val); ok {
+		return masked
+	}
+	normalized := val
+	if strings.Contains(val, `\n`) || strings.Contains(val, `\t`) || strings.Contains(val, `\r`) {
+		replacer := strings.NewReplacer(`\n`, "\n", `\t`, "\t", `\r`, "\r")
+		normalized = replacer.Replace(val)
+	}
+	if masked, ok := maskXMLTags(normalized); ok {
+		return masked
+	}
+	if masked, ok := maskKeyValuePairs(normalized); ok {
+		return masked
+	}
+	return val
 }
 
 // MaskNestedValue walks nested structures and masks values whose
@@ -53,29 +302,7 @@ func MaskNestedValue(v any, keyHint string) any {
 
 	switch val := v.(type) {
 	case string:
-		// if string starts with "\"" and ends with "\"", it might be a JSON-encoded string, so try to unquote it first
-		if strings.HasPrefix(val, "\"") && strings.HasSuffix(val, "\"") {
-			unquoted, err := strconv.Unquote(val)
-			if err == nil {
-				return MaskNestedValue(unquoted, "")
-			}
-		}
-		// check if the string itself looks like a JSON object and try to parse it
-		if strings.HasPrefix(val, "{") && strings.HasSuffix(val, "}") {
-			var parsed any
-			if err := json.Unmarshal([]byte(val), &parsed); err == nil {
-				return MaskNestedValue(parsed, "")
-			} else {
-				// try to unescape common JSON escape sequences and parse again
-				unescaped := strings.ReplaceAll(val, `\"`, `"`)
-				unescaped = strings.ReplaceAll(unescaped, `\\`, `\`)
-				if err := json.Unmarshal([]byte(unescaped), &parsed); err == nil {
-					return MaskNestedValue(parsed, "")
-				}
-			}
-		}
-
-		return val
+		return maskStringValue(val)
 	case map[string]any:
 		out := make(map[string]any, len(val))
 		for k, vv := range val {
