@@ -467,7 +467,7 @@ func (s *SanitizerSuite) TestMaskNestedValueFromFile() {
 			continue
 		}
 
-		// Parse format: "input|keyHint|expectedContainsMask"
+		// Parse format: "pattern|input|expected_masked_parts"
 		firstSep := strings.Index(line, "|")
 		if firstSep == -1 {
 			continue
@@ -475,10 +475,12 @@ func (s *SanitizerSuite) TestMaskNestedValueFromFile() {
 		lastSep := strings.LastIndex(line, "|")
 		testName := line[:firstSep]
 		input := ""
+		expected := ""
 		if lastSep == firstSep {
 			input = line[firstSep+1:]
 		} else {
 			input = line[firstSep+1 : lastSep]
+			expected = strings.TrimSpace(line[lastSep+1:])
 		}
 		input = normalizePatternString(input)
 
@@ -486,8 +488,24 @@ func (s *SanitizerSuite) TestMaskNestedValueFromFile() {
 			result := sanitizer.MaskNestedValue(input, "")
 			resultStr := fmt.Sprintf("%v", result)
 
+			if expected == "" || strings.EqualFold(expected, "(empty string)") {
+				if resultStr != input {
+					s.Contains(resultStr, "🔒", "masked result should contain lock emoji")
+				}
+				return
+			}
+
+			parts := strings.Split(expected, ",")
 			s.NotEqual(input, resultStr, "input %q should be masked", input)
 			s.Contains(resultStr, "🔒", "masked result should contain lock emoji")
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				part = normalizePatternString(part)
+				s.NotContains(resultStr, part, "masked result should not contain %q", part)
+			}
 		})
 	}
 }
