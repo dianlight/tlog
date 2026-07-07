@@ -4,7 +4,7 @@ go 1.25.3
 
 require (
 	github.com/dianlight/tlog v0.0.0-20251028130235-58bbea0d385c
-	gitlab.com/tozd/go/errors v0.10.0
+	gitlab.com/tozd/go/errors v0.11.1
 )
 
 require (
