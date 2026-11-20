@@ -149,6 +149,7 @@ func TestLowRateWindowDisabled(t *testing.T) {
 func TestLowRateContextVariant(t *testing.T) {
 	ch := setupLowRateTest(t, LevelWarn)
 	cfg := RateLimitConfig{Window: 100 * time.Millisecond}
+	//lint:ignore SA1029 tlog intentionally extracts context values by string key.
 	ctx := context.WithValue(context.Background(), "request_id", "req-1")
 
 	WarnLowRateContext(ctx, cfg, "context failure", "disk", "sda")
