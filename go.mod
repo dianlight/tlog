@@ -1,10 +1,10 @@
 module github.com/dianlight/tlog
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/fatih/color v1.18.0
-	github.com/k0kubun/pp/v3 v3.5.2
+	github.com/k0kubun/pp/v3 v3.5.4
 	github.com/lmittmann/tint v1.1.2
 	github.com/mattn/go-isatty v0.0.24
 	github.com/samber/slog-formatter v1.2.2
@@ -21,6 +21,6 @@ require (
 	github.com/samber/lo v1.52.0 // indirect
 	github.com/samber/slog-common v0.19.0 // indirect
 	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.38.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
