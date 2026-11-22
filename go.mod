@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/fatih/color v1.19.0
 	github.com/k0kubun/pp/v3 v3.5.4
-	github.com/lmittmann/tint v1.1.2
+	github.com/lmittmann/tint v1.2.1
 	github.com/mattn/go-isatty v0.0.24
 	github.com/samber/slog-formatter v1.3.0
 	github.com/samber/slog-multi v1.9.0
