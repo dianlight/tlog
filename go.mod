@@ -10,7 +10,7 @@ require (
 	github.com/samber/slog-formatter v1.3.0
 	github.com/samber/slog-multi v1.9.0
 	github.com/stretchr/testify v1.12.1
-	gitlab.com/tozd/go/errors v0.10.0
+	gitlab.com/tozd/go/errors v0.11.1
 )
 
 require (
