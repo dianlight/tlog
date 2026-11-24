@@ -175,7 +175,7 @@ func createBaseHandler(level slog.Level) slog.Handler {
 	color.NoColor = !isTerminal || !config.EnableColors
 
 	// Create base tint handler with context extraction
-	tintHandler := tint.NewHandler(os.Stderr, &tint.Options{
+	tintHandler := tint.NewTextHandler(os.Stderr, &tint.Options{
 		Level:      level,
 		TimeFormat: config.TimeFormat,
 		NoColor:    !isTerminal || !config.EnableColors,
